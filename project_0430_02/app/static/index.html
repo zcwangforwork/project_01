@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QMS 文档生成工具 - 医疗器械质量体系文档生成</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            width: 100%;
+            max-width: 650px;
+        }
+
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #444;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        label .required {
+            color: #e74c3c;
+        }
+
+        select, input, textarea {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+            font-family: inherit;
+        }
+
+        select:focus, input:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        textarea {
+            min-height: 80px;
+            resize: vertical;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 14px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .status {
+            margin-top: 20px;
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+            font-size: 14px;
+            display: none;
+        }
+
+        .status.info { background: #e3f2fd; color: #1565c0; display: block; }
+        .status.success { background: #e8f5e9; color: #2e7d32; display: block; }
+        .status.error { background: #ffebee; color: #c62828; display: block; }
+        .status.loading { background: #fff3e0; color: #e65100; display: block; }
+
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .doc-type-desc {
+            font-size: 12px;
+            color: #888;
+            margin-top: 4px;
+        }
+
+        .footer {
+            text-align: center;
+            margin-top: 20px;
+            color: #999;
+            font-size: 12px;
+        }
+
+        .category-header {
+            font-size: 13px;
+            font-weight: 600;
+            color: #667eea;
+            padding: 8px 12px;
+            background: #f5f3ff;
+            border-radius: 6px;
+            margin-top: 8px;
+        }
+
+        .doc-list {
+            padding-left: 0;
+            list-style: none;
+        }
+
+        .doc-list li {
+            padding: 4px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>QMS 文档生成工具</h1>
+        <p class="subtitle">医疗器械质量体系文档智能生成</p>
+
+        <form id="docForm">
+            <div class="form-group">
+                <label for="docType">文档类型 <span class="required">*</span></label>
+                <select id="docType" name="docType" required>
+                    <option value="">请选择文档类型</option>
+                    <optgroup label="【风险管理类】">
+                        <option value="risk_management_report">风险管理报告</option>
+                        <option value="risk_management_plan">风险管理计划</option>
+                        <option value="fmea_analysis">FMEA分析报告</option>
+                        <option value="risk_acceptance_criteria">风险可接受准则</option>
+                        <option value="periodic_risk_evaluation">定期风险评价报告</option>
+                    </optgroup>
+                    <optgroup label="【设计开发类】">
+                        <option value="design_development_plan">设计和开发计划</option>
+                        <option value="design_input">设计输入</option>
+                        <option value="design_output">设计输出</option>
+                        <option value="design_review">设计评审</option>
+                        <option value="design_verification">设计验证</option>
+                        <option value="design_validation">设计确认</option>
+                        <option value="design_change">设计变更</option>
+                        <option value="design_history_file">设计历史文件(DHF)</option>
+                    </optgroup>
+                    <optgroup label="【注册申报类】">
+                        <option value="product_spec">产品技术要求</option>
+                    </optgroup>
+                    <optgroup label="【通用类】">
+                        <option value="instruction">使用说明书</option>
+                        <option value="sop">作业指导书</option>
+                    </optgroup>
+                </select>
+                <div class="doc-type-desc" id="docTypeDesc">请选择要生成的文档类型</div>
+            </div>
+
+            <div class="form-group">
+                <label for="productName">产品名称 <span class="required">*</span></label>
+                <input type="text" id="productName" name="productName" placeholder="例如：胰岛素泵、有源手术器械" required>
+            </div>
+
+            <div class="form-group">
+                <label for="productType">产品类型 <span class="required">*</span></label>
+                <input type="text" id="productType" name="productType" placeholder="例如：有源医疗器械、植入器械" required>
+            </div>
+
+            <div class="form-group">
+                <label for="productParams">产品参数/描述</label>
+                <textarea id="productParams" name="productParams" placeholder="请描述产品的关键技术参数、结构组成、预期用途等特性..."></textarea>
+            </div>
+
+            <button type="submit" class="btn" id="submitBtn">开始生成</button>
+        </form>
+
+        <div class="status" id="status"></div>
+
+        <div class="footer">
+            <p>基于 AI 技术自动生成符合法规的质量体系文档</p>
+        </div>
+    </div>
+
+    <script>
+        // 文档类型描述
+        const docTypeDescriptions = {
+            'risk_management_report': '符合ISO 14971/GB 42062的综合风险管理报告，包含概述、风险分析、评估、控制措施、剩余风险评价等完整章节',
+            'risk_management_plan': '定义风险管理活动的人员职责、活动安排、评审计划和风险可接受准则',
+            'fmea_analysis': '失效模式与效应分析报告，包含严重度、频度数、探测度评价和RPN计算',
+            'risk_acceptance_criteria': '风险可接受准则文档，定义S/O/D等级划分和RPN阈值标准',
+            'periodic_risk_evaluation': '医疗器械上市后定期风险评价报告，符合法规要求',
+            'design_development_plan': '定义设计开发阶段、活动、职责和时间安排，符合ISO 13485要求',
+            'design_input': '产品设计输入要求，包括性能、法规、标准要求，作为设计开发的依据',
+            'design_output': '设计输出文件，包括图纸、规范、检验规程、包装规范等',
+            'design_review': '设计评审记录，包括评审内容、参与人员、评审结论、整改措施',
+            'design_verification': '设计验证报告，证明设计输出满足设计输入要求，包括测试数据',
+            'design_validation': '设计确认报告，证明产品满足使用要求和预期用途',
+            'design_change': '设计变更控制记录，包括变更评估、审批和验证，确保变更受控',
+            'design_history_file': 'DHF设计历史文件，汇总所有设计开发活动记录，用于注册和核查',
+            'product_spec': '医疗器械注册产品技术要求，包含型号规格、性能指标、检验方法等',
+            'instruction': '医疗器械使用说明书(IFU)，指导用户正确安全使用产品',
+            'sop': '标准操作规程，规范生产和质量控制流程'
+        };
+
+        // 更新文档类型描述
+        document.getElementById('docType').addEventListener('change', function() {
+            const desc = docTypeDescriptions[this.value] || '请选择要生成的文档类型';
+            document.getElementById('docTypeDesc').textContent = desc;
+        });
+
+        // 表单提交
+        document.getElementById('docForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const submitBtn = document.getElementById('submitBtn');
+            const status = document.getElementById('status');
+
+            const formData = {
+                doc_type: document.getElementById('docType').value,
+                product_name: document.getElementById('productName').value,
+                product_type: document.getElementById('productType').value,
+                product_params: document.getElementById('productParams').value
+            };
+
+            if (!formData.doc_type || !formData.product_name || !formData.product_type) {
+                showStatus('请填写所有必填项', 'error');
+                return;
+            }
+
+            submitBtn.disabled = true;
+            showStatus('<span class="spinner"></span>正在生成文档，请稍候...', 'loading');
+
+            try {
+                const response = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || '生成失败');
+                }
+
+                const contentDisposition = response.headers.get('Content-Disposition');
+                let filename = `${formData.product_name}_${formData.doc_type}.docx`;
+                if (contentDisposition) {
+                    const match = contentDisposition.match(/filename\*?=['"]?([^;\n"']+)/i);
+                    if (match) {
+                        filename = decodeURIComponent(match[1]);
+                    }
+                }
+
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+
+                showStatus('文档生成成功！文件已自动下载。', 'success');
+
+            } catch (error) {
+                showStatus('生成失败: ' + error.message, 'error');
+            } finally {
+                submitBtn.disabled = false;
+            }
+        });
+
+        function showStatus(message, type) {
+            const status = document.getElementById('status');
+            status.className = 'status ' + type;
+            status.innerHTML = message;
+        }
+    </script>
+</body>
+</html>
