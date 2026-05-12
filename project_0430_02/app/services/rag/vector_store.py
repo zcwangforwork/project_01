@@ -16,7 +16,6 @@ from app.services.rag.embedder import Embedder
 
 # 延迟导入
 _chroma_client = None
-_embedder = None
 
 
 class VectorStore:
@@ -62,10 +61,9 @@ class VectorStore:
     @property
     def embedder(self):
         """延迟初始化嵌入器"""
-        global _embedder
-        if _embedder is None:
-            _embedder = Embedder()
-        return _embedder
+        if self._embedder is None:
+            self._embedder = Embedder()
+        return self._embedder
 
     @property
     def collection(self):

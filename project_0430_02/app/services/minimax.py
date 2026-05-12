@@ -172,7 +172,7 @@ DEFAULT_CHAPTERS = [
 class MiniMaxService:
     """MiniMax API 调用服务"""
 
-    _use_rag_default = True  # 默认启用 RAG
+    _use_rag_default = False  # 默认禁用 RAG（避免模型问题影响启动）
 
     def __init__(self, api_key: Optional[str] = None, use_rag: bool = True):
         """

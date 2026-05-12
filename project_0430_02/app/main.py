@@ -3,6 +3,9 @@ QMS Document Generator - FastAPI Application
 医疗器械质量体系文档生成工具
 """
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
