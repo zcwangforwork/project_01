@@ -29,11 +29,16 @@ def build_rag_prompt(
         return base_prompt  # 返回原始 prompt 而非 None
 
     # 按 source_file 分组，构建参考上下文
+    # 限制每条检索结果长度，避免 RAG 上下文过长导致 LLM 超时
+    MAX_CHUNK_LENGTH = 1000
+    MAX_CONTEXT_LENGTH = 8000
+
     context_blocks = []
+    total_length = 0
     for chunk in retrieved_chunks:
         source = chunk.get("source_file", "未知来源")
         section = chunk.get("section_title", "")
-        text = chunk.get("text", "").strip()
+        text = chunk.get("text", "").strip()[:MAX_CHUNK_LENGTH]
 
         if not text:
             continue
@@ -43,7 +48,11 @@ def build_rag_prompt(
             header += f" | 章节：{section}"
         header += "]"
 
-        context_blocks.append(f"{header}\n{text}")
+        block = f"{header}\n{text}"
+        if total_length + len(block) > MAX_CONTEXT_LENGTH:
+            break
+        context_blocks.append(block)
+        total_length += len(block)
 
     if not context_blocks:
         return None

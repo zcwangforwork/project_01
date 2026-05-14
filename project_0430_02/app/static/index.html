@@ -105,6 +105,15 @@
             box-shadow: none;
         }
 
+        .btn-download {
+            background: linear-gradient(135deg, #2e7d32 0%, #43a047 100%);
+            margin-top: 12px;
+        }
+
+        .btn-download:hover {
+            box-shadow: 0 6px 20px rgba(46, 125, 50, 0.4);
+        }
+
         .status {
             margin-top: 20px;
             padding: 12px;
@@ -166,6 +175,22 @@
 
         .doc-list li {
             padding: 4px 0;
+        }
+
+        .progress-bar-container {
+            margin-top: 10px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            height: 8px;
+            overflow: hidden;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 4px;
+            transition: width 0.5s ease;
+            width: 0%;
         }
     </style>
 </head>
@@ -253,6 +278,8 @@
             'sop': '标准操作规程，规范生产和质量控制流程'
         };
 
+        let pollTimer = null;
+
         // 更新文档类型描述
         document.getElementById('docType').addEventListener('change', function() {
             const desc = docTypeDescriptions[this.value] || '请选择要生成的文档类型';
@@ -264,7 +291,6 @@
             e.preventDefault();
 
             const submitBtn = document.getElementById('submitBtn');
-            const status = document.getElementById('status');
 
             const formData = {
                 doc_type: document.getElementById('docType').value,
@@ -279,9 +305,10 @@
             }
 
             submitBtn.disabled = true;
-            showStatus('<span class="spinner"></span>正在生成文档，请稍候...', 'loading');
+            showStatus('<span class="spinner"></span>正在提交生成任务...', 'loading');
 
             try {
+                // 提交生成任务
                 const response = await fetch('/api/generate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -290,36 +317,71 @@
 
                 if (!response.ok) {
                     const error = await response.json();
-                    throw new Error(error.detail || '生成失败');
+                    throw new Error(error.detail || '提交失败');
                 }
 
-                const contentDisposition = response.headers.get('Content-Disposition');
-                let filename = `${formData.product_name}_${formData.doc_type}.docx`;
-                if (contentDisposition) {
-                    const match = contentDisposition.match(/filename\*?=['"]?([^;\n"']+)/i);
-                    if (match) {
-                        filename = decodeURIComponent(match[1]);
-                    }
-                }
+                const result = await response.json();
+                const taskId = result.task_id;
 
-                const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                window.URL.revokeObjectURL(url);
-                document.body.removeChild(a);
-
-                showStatus('文档生成成功！文件已自动下载。', 'success');
+                // 开始轮询任务状态
+                showStatus('<span class="spinner"></span>正在生成文档，请稍候...<div class="progress-bar-container"><div class="progress-bar" id="progressBar"></div></div>', 'loading');
+                pollStatus(taskId);
 
             } catch (error) {
-                showStatus('生成失败: ' + error.message, 'error');
-            } finally {
+                showStatus('提交失败: ' + error.message, 'error');
                 submitBtn.disabled = false;
             }
         });
+
+        function pollStatus(taskId) {
+            if (pollTimer) clearInterval(pollTimer);
+
+            pollTimer = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/status/${taskId}`);
+                    if (!response.ok) throw new Error('查询状态失败');
+
+                    const data = await response.json();
+
+                    // 更新进度条
+                    const progressBar = document.getElementById('progressBar');
+                    if (progressBar) {
+                        progressBar.style.width = data.progress + '%';
+                    }
+
+                    if (data.status === 'completed') {
+                        clearInterval(pollTimer);
+                        pollTimer = null;
+
+                        showStatus(
+                            '文档生成成功！' +
+                            '<button class="btn btn-download" onclick="downloadFile(\'' + taskId + '\')">下载文档</button>',
+                            'success'
+                        );
+                        document.getElementById('submitBtn').disabled = false;
+
+                    } else if (data.status === 'failed') {
+                        clearInterval(pollTimer);
+                        pollTimer = null;
+                        showStatus(data.message, 'error');
+                        document.getElementById('submitBtn').disabled = false;
+
+                    } else {
+                        // 更新状态消息
+                        const progressBarHtml = '<div class="progress-bar-container"><div class="progress-bar" id="progressBar" style="width:' + data.progress + '%"></div></div>';
+                        showStatus('<span class="spinner"></span>' + data.message + progressBarHtml, 'loading');
+                    }
+
+                } catch (error) {
+                    // 轮询失败不立即终止，继续尝试
+                    console.error('轮询状态失败:', error);
+                }
+            }, 2000); // 每2秒轮询一次
+        }
+
+        function downloadFile(taskId) {
+            window.location.href = `/api/download/${taskId}`;
+        }
 
         function showStatus(message, type) {
             const status = document.getElementById('status');

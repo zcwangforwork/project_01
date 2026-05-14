@@ -1,13 +1,16 @@
 """
-API Routes - 文档生成接口
+API Routes - 文档生成接口（异步任务模式）
 """
 
+import uuid
+import threading
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
 from app.services.generator import DocumentGenerator
 import io
 import os
+import time
 from urllib.parse import quote
 
 router = APIRouter()
@@ -45,41 +48,35 @@ class GenerateRequest(BaseModel):
     product_params: str = Field("", description="产品参数详情")
 
 
-class GenerateResponse(BaseModel):
-    """文档生成响应"""
-    success: bool
-    message: str = ""
-    file_bytes: bytes = None
+# 内存中的任务存储
+tasks = {}  # task_id -> {status, progress, message, file_bytes, filename, created_at}
 
 
-@router.post("/generate")
-async def generate_document(request: GenerateRequest):
-    """
-    生成质量体系文档
-
-    根据文档类型和产品信息，调用AI生成文档内容并返回Word文件
-    """
-    # 验证 doc_type
-    if request.doc_type not in DOC_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"无效的文档类型。可选值: {', '.join(DOC_TYPES)}"
-        )
-
-    # 验证必填字段
-    if not request.product_name.strip():
-        raise HTTPException(status_code=400, detail="产品名称不能为空")
-
+def _run_generation(task_id: str, doc_type: str, product_name: str, product_type: str, product_params: str):
+    """在后台线程中执行文档生成"""
     try:
-        generator = DocumentGenerator()
-        file_bytes = await generator.generate(
-            doc_type=request.doc_type,
-            product_name=request.product_name,
-            product_type=request.product_type,
-            product_params=request.product_params
-        )
+        tasks[task_id]["status"] = "generating"
+        tasks[task_id]["progress"] = 10
+        tasks[task_id]["message"] = "正在生成文档内容..."
 
-        # 生成文件名（URL编码避免中文编码问题）
+        generator = DocumentGenerator()
+
+        # 同步生成文档（在线程中运行，不阻塞事件循环）
+        import asyncio
+        loop = asyncio.new_event_loop()
+        try:
+            file_bytes = loop.run_until_complete(
+                generator.generate(
+                    doc_type=doc_type,
+                    product_name=product_name,
+                    product_type=product_type,
+                    product_params=product_params
+                )
+            )
+        finally:
+            loop.close()
+
+        # 生成文件名
         doc_type_labels = {
             "risk_management_report": "风险管理报告",
             "risk_management_plan": "风险管理计划",
@@ -98,20 +95,100 @@ async def generate_document(request: GenerateRequest):
             "instruction": "使用说明书",
             "sop": "作业指导书"
         }
-        label = doc_type_labels.get(request.doc_type, request.doc_type)
-        filename = f"{request.product_name}_{label}.docx"
-        encoded_filename = quote(filename)
+        label = doc_type_labels.get(doc_type, doc_type)
+        filename = f"{product_name}_{label}.docx"
 
-        return StreamingResponse(
-            io.BytesIO(file_bytes),
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={
-                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
-            }
-        )
+        tasks[task_id]["status"] = "completed"
+        tasks[task_id]["progress"] = 100
+        tasks[task_id]["message"] = "文档生成完成！"
+        tasks[task_id]["file_bytes"] = file_bytes
+        tasks[task_id]["filename"] = filename
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        tasks[task_id]["status"] = "failed"
+        tasks[task_id]["progress"] = 0
+        tasks[task_id]["message"] = f"生成失败: {str(e)}"
+
+
+@router.post("/generate")
+async def generate_document(request: GenerateRequest):
+    """
+    提交文档生成任务（异步）
+
+    立即返回任务ID，文档在后台生成，前端通过 /api/status/{task_id} 轮询进度
+    """
+    # 验证 doc_type
+    if request.doc_type not in DOC_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"无效的文档类型。可选值: {', '.join(DOC_TYPES)}"
+        )
+
+    # 验证必填字段
+    if not request.product_name.strip():
+        raise HTTPException(status_code=400, detail="产品名称不能为空")
+
+    # 创建任务
+    task_id = str(uuid.uuid4())[:8]
+    tasks[task_id] = {
+        "status": "pending",
+        "progress": 0,
+        "message": "任务已创建，等待生成...",
+        "file_bytes": None,
+        "filename": "",
+        "created_at": time.time()
+    }
+
+    # 启动后台线程
+    thread = threading.Thread(
+        target=_run_generation,
+        args=(task_id, request.doc_type, request.product_name, request.product_type, request.product_params),
+        daemon=True
+    )
+    thread.start()
+
+    return {"task_id": task_id, "status": "pending", "message": "任务已提交"}
+
+
+@router.get("/status/{task_id}")
+async def get_task_status(task_id: str):
+    """查询任务状态"""
+    if task_id not in tasks:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    task = tasks[task_id]
+    return {
+        "task_id": task_id,
+        "status": task["status"],
+        "progress": task["progress"],
+        "message": task["message"],
+        "filename": task.get("filename", "")
+    }
+
+
+@router.get("/download/{task_id}")
+async def download_document(task_id: str):
+    """下载生成的文档"""
+    if task_id not in tasks:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    task = tasks[task_id]
+
+    if task["status"] != "completed":
+        raise HTTPException(status_code=400, detail="文档尚未生成完成")
+
+    if not task["file_bytes"]:
+        raise HTTPException(status_code=500, detail="文档数据为空")
+
+    encoded_filename = quote(task["filename"])
+
+    return StreamingResponse(
+        io.BytesIO(task["file_bytes"]),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+        }
+    )
 
 
 @router.get("/doc-types")

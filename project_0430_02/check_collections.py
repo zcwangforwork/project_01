@@ -16,7 +16,7 @@ print("检查 ChromaDB 知识库")
 print("=" * 70)
 
 # ChromaDB 持久化目录
-base_dir = project_root / "chroma_data"
+base_dir = project_root / "chroma_db"
 print(f"\n数据目录: {base_dir}")
 
 if not base_dir.exists():

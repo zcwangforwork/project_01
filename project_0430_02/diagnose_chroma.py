@@ -17,7 +17,7 @@ print("ChromaDB 知识库诊断")
 print("=" * 70)
 
 # ChromaDB 持久化目录
-base_dir = project_root / "chroma_data"
+base_dir = project_root / "chroma_db"
 print(f"\n数据目录: {base_dir}")
 
 # 初始化客户端

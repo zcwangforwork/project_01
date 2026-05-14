@@ -33,7 +33,7 @@ except ImportError:
     sys.exit(1)
 
 # 初始化 ChromaDB
-base_dir = project_root / "chroma_data"
+base_dir = project_root / "chroma_db"
 client = chromadb.PersistentClient(
     path=str(base_dir),
     settings=Settings(anonymized_telemetry=False)

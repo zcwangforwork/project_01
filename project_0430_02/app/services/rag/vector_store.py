@@ -22,8 +22,11 @@ class VectorStore:
     """ChromaDB 向量存储封装"""
 
     # ChromaDB 持久化目录
-    BASE_DIR = Path(__file__).parent.parent.parent.parent / "chroma_data"
+    BASE_DIR = Path(__file__).parent.parent.parent.parent / "chroma_db"
     COLLECTION_NAME_PREFIX = "qms_doc_"
+
+    # 查询时使用的目标 collection 列表（优先级从高到低）
+    QUERY_COLLECTIONS = ["medical_device_kb_v2"]
 
     def __init__(
         self,
@@ -156,7 +159,7 @@ class VectorStore:
         similarity_threshold: float = 0.0  # 默认 0.0 允许几乎所有结果通过
     ) -> list[dict]:
         """
-        语义检索
+        语义检索 - 从多个 collection 检索并合并结果
 
         Args:
             query: 查询文本（产品信息）
@@ -167,39 +170,43 @@ class VectorStore:
         Returns:
             检索结果列表，每项包含 text, source_file, section_title, distance
         """
-        # 使用我们的嵌入器生成查询向量
         query_embedding = self.embedder.encode_single(query)
+        all_results = []
 
-        # 使用向量检索而不是文本检索
-        results = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=top_k,
-            include=["documents", "metadatas", "distances"]
-        )
+        for coll_name in self.QUERY_COLLECTIONS:
+            try:
+                coll = self.client.get_collection(name=coll_name)
+                results = coll.query(
+                    query_embeddings=[query_embedding],
+                    n_results=top_k,
+                    include=["documents", "metadatas", "distances"]
+                )
+                if results["ids"]:
+                    for i in range(len(results["ids"][0])):
+                        distance = results["distances"][0][i]
+                        similarity = max(0.0, 1.0 - distance / 2.0)
+                        if similarity < similarity_threshold:
+                            continue
+                        meta = results["metadatas"][0][i] or {}
+                        # doc_type 过滤
+                        if doc_type and meta.get("doc_type", "") != doc_type:
+                            continue
+                        all_results.append({
+                            "text": results["documents"][0][i],
+                            "source_file": meta.get("source_file", ""),
+                            "section_title": meta.get("section_title", ""),
+                            "doc_type": meta.get("doc_type", ""),
+                            "chunk_index": meta.get("chunk_index", 0),
+                            "similarity": similarity,
+                            "distance": distance
+                        })
+            except Exception as e:
+                print(f"    [VectorStore] 查询 collection '{coll_name}' 失败: {e}")
+                continue
 
-        output = []
-        if results["ids"]:
-            for i in range(len(results["ids"][0])):
-                distance = results["distances"][0][i]
-                # ChromaDB 0.4.x 返回的是余弦距离，范围 [0, 2]
-                # 0 = 完全相同，2 = 完全相反
-                # 转换为相似度 (0-1): 1 - distance/2 使 0→1, 2→0
-                similarity = max(0.0, 1.0 - distance / 2.0)
-
-                if similarity < similarity_threshold:
-                    continue
-
-                output.append({
-                    "text": results["documents"][0][i],
-                    "source_file": results["metadatas"][0][i].get("source_file", ""),
-                    "section_title": results["metadatas"][0][i].get("section_title", ""),
-                    "doc_type": results["metadatas"][0][i].get("doc_type", ""),
-                    "chunk_index": results["metadatas"][0][i].get("chunk_index", 0),
-                    "similarity": similarity,
-                    "distance": distance
-                })
-
-        return output
+        # 按相似度排序并返回 top_k
+        all_results.sort(key=lambda x: x["similarity"], reverse=True)
+        return all_results[:top_k]
 
     def retrieve_hybrid(
         self,
@@ -210,7 +217,10 @@ class VectorStore:
         vector_weight: float = 0.6
     ) -> list[dict]:
         """
-        混合检索：语义向量检索 + BM25 关键词检索
+        混合检索：从多个 collection 语义向量检索
+
+        注意：当 collection 数据量过大时（>5万条），BM25 检索需加载全量数据到内存，
+        开销巨大，因此对大 collection 仅使用向量检索。
 
         Args:
             query: 查询文本
@@ -222,68 +232,96 @@ class VectorStore:
         Returns:
             合并后的检索结果列表，按综合分数排序
         """
-        # 使用我们的嵌入器生成查询向量
         query_embedding = self.embedder.encode_single(query)
 
-        # 1. 向量检索（获取更多候选）
-        vector_results = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=top_k * 2,
-            include=["documents", "metadatas", "distances"]
-        )
-
-        # 构建向量检索结果字典
+        # 1. 向量检索 - 从多个 collection 检索并合并
         vector_dict = {}
-        doc_type_filtered_count = 0
-        if vector_results["ids"]:
-            for i in range(len(vector_results["ids"][0])):
-                chunk_id = vector_results["ids"][0][i]
-                distance = vector_results["distances"][0][i]
-                similarity = max(0.0, 1.0 - distance / 2.0)
+        for coll_name in self.QUERY_COLLECTIONS:
+            try:
+                coll = self.client.get_collection(name=coll_name)
+                vector_results = coll.query(
+                    query_embeddings=[query_embedding],
+                    n_results=top_k * 2,
+                    include=["documents", "metadatas", "distances"]
+                )
+                if vector_results["ids"]:
+                    for i in range(len(vector_results["ids"][0])):
+                        chunk_id = vector_results["ids"][0][i]
+                        distance = vector_results["distances"][0][i]
+                        similarity = max(0.0, 1.0 - distance / 2.0)
 
-                if similarity >= similarity_threshold:
-                    meta = vector_results["metadatas"][0][i]
-                    chunk_doc_type = meta.get("doc_type", "")
+                        if similarity >= similarity_threshold:
+                            meta = vector_results["metadatas"][0][i] or {}
+                            chunk_doc_type = meta.get("doc_type", "")
 
-                    # doc_type 过滤
-                    if doc_type and chunk_doc_type != doc_type:
-                        doc_type_filtered_count += 1
-                        continue
+                            # doc_type 过滤
+                            if doc_type and chunk_doc_type != doc_type:
+                                continue
 
-                    vector_dict[chunk_id] = {
-                        "text": vector_results["documents"][0][i],
-                        "source_file": meta.get("source_file", ""),
-                        "section_title": meta.get("section_title", ""),
-                        "doc_type": chunk_doc_type,
-                        "chunk_index": meta.get("chunk_index", 0),
-                        "similarity": similarity,
-                        "vector_score": similarity,
-                        "bm25_score": 0.0
-                    }
+                            # 去重：同一 chunk_id 只保留相似度更高的
+                            if chunk_id not in vector_dict or similarity > vector_dict[chunk_id]["vector_score"]:
+                                vector_dict[chunk_id] = {
+                                    "text": vector_results["documents"][0][i],
+                                    "source_file": meta.get("source_file", ""),
+                                    "section_title": meta.get("section_title", ""),
+                                    "doc_type": chunk_doc_type,
+                                    "chunk_index": meta.get("chunk_index", 0),
+                                    "similarity": similarity,
+                                    "vector_score": similarity,
+                                    "bm25_score": 0.0
+                                }
+            except Exception as e:
+                print(f"    [VectorStore] 混合检索 collection '{coll_name}' 失败: {e}")
+                continue
 
         # 如果 doc_type 过滤后无结果，忽略过滤重新检索
         if not vector_dict and doc_type:
             print(f"    [RAG] doc_type='{doc_type}' 过滤无结果，忽略类型过滤")
-            for i in range(len(vector_results["ids"][0])):
-                chunk_id = vector_results["ids"][0][i]
-                distance = vector_results["distances"][0][i]
-                similarity = max(0.0, 1.0 - distance / 2.0)
+            for coll_name in self.QUERY_COLLECTIONS:
+                try:
+                    coll = self.client.get_collection(name=coll_name)
+                    vector_results = coll.query(
+                        query_embeddings=[query_embedding],
+                        n_results=top_k * 2,
+                        include=["documents", "metadatas", "distances"]
+                    )
+                    if vector_results["ids"]:
+                        for i in range(len(vector_results["ids"][0])):
+                            chunk_id = vector_results["ids"][0][i]
+                            distance = vector_results["distances"][0][i]
+                            similarity = max(0.0, 1.0 - distance / 2.0)
 
-                if similarity >= similarity_threshold:
-                    meta = vector_results["metadatas"][0][i]
-                    vector_dict[chunk_id] = {
-                        "text": vector_results["documents"][0][i],
-                        "source_file": meta.get("source_file", ""),
-                        "section_title": meta.get("section_title", ""),
-                        "doc_type": meta.get("doc_type", ""),
-                        "chunk_index": meta.get("chunk_index", 0),
-                        "similarity": similarity,
-                        "vector_score": similarity,
-                        "bm25_score": 0.0
-                    }
+                            if similarity >= similarity_threshold:
+                                meta = vector_results["metadatas"][0][i] or {}
+                                if chunk_id not in vector_dict or similarity > vector_dict[chunk_id]["vector_score"]:
+                                    vector_dict[chunk_id] = {
+                                        "text": vector_results["documents"][0][i],
+                                        "source_file": meta.get("source_file", ""),
+                                        "section_title": meta.get("section_title", ""),
+                                        "doc_type": meta.get("doc_type", ""),
+                                        "chunk_index": meta.get("chunk_index", 0),
+                                        "similarity": similarity,
+                                        "vector_score": similarity,
+                                        "bm25_score": 0.0
+                                    }
+                except Exception:
+                    continue
 
-        # 2. BM25 关键词检索
-        bm25_scores = self._bm25_search(query, None, top_k * 2)  # BM25 不过滤doc_type
+        # 2. BM25 关键词检索 - 仅对小 collection 执行（<5万条）
+        bm25_scores = {}
+        for coll_name in self.QUERY_COLLECTIONS:
+            try:
+                coll = self.client.get_collection(name=coll_name)
+                coll_count = coll.count()
+                if coll_count < 50000:
+                    scores = self._bm25_search_collection(coll_name, query, None, top_k * 2)
+                    for cid, score in scores.items():
+                        if cid not in bm25_scores or score > bm25_scores[cid]:
+                            bm25_scores[cid] = score
+                else:
+                    print(f"    [VectorStore] 跳过 BM25 检索（{coll_name} 有 {coll_count} 条，超过 5 万阈值）")
+            except Exception:
+                continue
 
         # 3. 合并结果
         all_ids = set(vector_dict.keys()) | set(bm25_scores.keys())
@@ -327,7 +365,23 @@ class VectorStore:
         top_k: int = 10
     ) -> dict:
         """
-        BM25 关键词检索
+        BM25 关键词检索 - 从默认 collection 检索
+
+        Returns:
+            {chunk_id: bm25_score, ...}
+        """
+        full_name = f"{self.COLLECTION_NAME_PREFIX}{self.collection_name}"
+        return self._bm25_search_collection(full_name, query, doc_type, top_k)
+
+    def _bm25_search_collection(
+        self,
+        collection_name: str,
+        query: str,
+        doc_type: Optional[str] = None,
+        top_k: int = 10
+    ) -> dict:
+        """
+        BM25 关键词检索 - 从指定 collection 检索
 
         Returns:
             {chunk_id: bm25_score, ...}
@@ -338,8 +392,8 @@ class VectorStore:
             return {}
 
         try:
-            # 获取所有 chunks
-            result = self.collection.get(include=["documents", "metadatas"])
+            coll = self.client.get_collection(name=collection_name)
+            result = coll.get(include=["documents", "metadatas"])
             if not result["ids"]:
                 return {}
 
@@ -378,8 +432,18 @@ class VectorStore:
             return {}
 
     def count(self) -> int:
-        """返回 collection 中的文档块数量"""
-        return self.collection.count()
+        """返回所有查询 collection 中的文档块总数"""
+        total = 0
+        for coll_name in self.QUERY_COLLECTIONS:
+            try:
+                coll = self.client.get_collection(name=coll_name)
+                total += coll.count()
+            except Exception:
+                continue
+        # 如果目标 collection 无数据，回退到默认 collection
+        if total == 0:
+            return self.collection.count()
+        return total
 
     def clear(self):
         """清空 collection（谨慎使用）"""

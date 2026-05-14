@@ -611,8 +611,8 @@ class MiniMaxService:
                             doc_type=doc_type,
                             query=chapter_query,
                             top_k=8,
-                            similarity_threshold=0.25,
-                            vector_weight=0.6
+                            similarity_threshold=0.3,
+                            vector_weight=0.7
                         )
                         break  # 成功，跳出重试循环
                     except Exception as e:

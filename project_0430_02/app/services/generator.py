@@ -2,6 +2,7 @@
 Document Generator - 文档生成协调服务
 """
 
+import asyncio
 from app.services.minimax import MiniMaxService
 from app.services.template import TemplateService
 from typing import Optional
@@ -43,16 +44,17 @@ class DocumentGenerator:
         # 1. 验证参数
         self._validate_input(doc_type, product_name, product_type)
 
-        # 2. 加载模板
-        doc = self.template_service.load_template(doc_type)
-
-        # 3. 调用AI生成内容
-        content = self.minimax_service.generate_content_with_fallback(
+        # 2. 在线程池中执行耗时同步操作，避免阻塞事件循环
+        content = await asyncio.to_thread(
+            self.minimax_service.generate_content_with_fallback,
             doc_type=doc_type,
             product_name=product_name,
             product_type=product_type,
             product_params=product_params
         )
+
+        # 3. 加载模板
+        doc = self.template_service.load_template(doc_type)
 
         # 4. 填充模板
         doc = self.template_service.fill_template(
