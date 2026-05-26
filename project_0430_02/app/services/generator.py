@@ -5,7 +5,9 @@ Document Generator - 文档生成协调服务
 import asyncio
 from app.services.minimax import MiniMaxService
 from app.services.template import TemplateService
-from typing import Optional
+from app.services.doc_types import DOC_TYPES
+from app.services.attachment_service import resolve_attachment_content
+from typing import Optional, List
 
 
 class DocumentGenerator:
@@ -20,23 +22,28 @@ class DocumentGenerator:
         doc_type: str,
         product_name: str,
         product_type: str,
-        product_params: str = ""
+        product_params: str = "",
+        file_ids: Optional[List[str]] = None,
+        attachment_content: Optional[str] = None
     ) -> bytes:
         """
         生成文档
 
         完整流程：
         1. 验证输入参数
-        2. 调用AI生成内容
-        3. 加载模板
-        4. 填充内容
-        5. 返回Word文件字节
+        2. 解析附件内容（file_ids → 文本）
+        3. 调用AI生成内容
+        4. 加载模板
+        5. 填充内容
+        6. 返回Word文件字节
 
         Args:
             doc_type: 文档类型
             product_name: 产品名称
             product_type: 产品类型
             product_params: 产品参数
+            file_ids: 已入库附件的file_id列表
+            attachment_content: 临时附件的提取文本
 
         Returns:
             Word文件字节数据
@@ -44,19 +51,23 @@ class DocumentGenerator:
         # 1. 验证参数
         self._validate_input(doc_type, product_name, product_type)
 
-        # 2. 在线程池中执行耗时同步操作，避免阻塞事件循环
+        # 2. 解析附件内容
+        combined_attachment = self._resolve_attachments(file_ids, attachment_content)
+
+        # 3. 在线程池中执行耗时同步操作，避免阻塞事件循环
         content = await asyncio.to_thread(
             self.minimax_service.generate_content_with_fallback,
             doc_type=doc_type,
             product_name=product_name,
             product_type=product_type,
-            product_params=product_params
+            product_params=product_params,
+            attachment_content=combined_attachment
         )
 
-        # 3. 加载模板
+        # 4. 加载模板
         doc = self.template_service.load_template(doc_type)
 
-        # 4. 填充模板
+        # 5. 填充模板
         doc = self.template_service.fill_template(
             doc=doc,
             content=content,
@@ -64,8 +75,28 @@ class DocumentGenerator:
             doc_type=doc_type
         )
 
-        # 5. 转换为字节
+        # 6. 转换为字节
         return self.template_service.document_to_bytes(doc)
+
+    def _resolve_attachments(
+        self,
+        file_ids: Optional[List[str]],
+        attachment_content: Optional[str]
+    ) -> str:
+        """解析并合并附件内容"""
+        parts = []
+
+        # 从向量库解析 file_ids
+        if file_ids:
+            resolved = resolve_attachment_content(file_ids)
+            if resolved:
+                parts.append(resolved)
+
+        # 直接传入的文本内容
+        if attachment_content:
+            parts.append(attachment_content)
+
+        return "\n\n".join(parts) if parts else ""
 
     def _validate_input(
         self,
@@ -74,17 +105,8 @@ class DocumentGenerator:
         product_type: str
     ):
         """验证输入参数"""
-        valid_doc_types = [
-            "risk_management_report", "risk_management_plan", "fmea_analysis",
-            "risk_acceptance_criteria", "periodic_risk_evaluation",
-            "design_development_plan", "design_input", "design_output",
-            "design_review", "design_verification", "design_validation",
-            "design_change", "design_history_file",
-            "product_spec", "instruction", "sop"
-        ]
-
-        if doc_type not in valid_doc_types:
-            raise ValueError(f"无效的文档类型: {doc_type}，可选值: {', '.join(valid_doc_types)}")
+        if doc_type not in DOC_TYPES:
+            raise ValueError(f"无效的文档类型: {doc_type}，可选值: {', '.join(DOC_TYPES)}")
 
         if not product_name or not product_name.strip():
             raise ValueError("产品名称不能为空")

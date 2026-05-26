@@ -192,12 +192,153 @@
             transition: width 0.5s ease;
             width: 0%;
         }
+
+        /* ========== 附件上传样式 ========== */
+        .upload-section {
+            margin-bottom: 20px;
+        }
+        .section-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: #444;
+            margin-bottom: 4px;
+        }
+        .section-desc {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 12px;
+        }
+        .section-divider {
+            border: none;
+            border-top: 1px solid #e8e8e8;
+            margin: 20px 0;
+        }
+        .upload-area {
+            border: 2px dashed #ccc;
+            border-radius: 10px;
+            padding: 24px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.3s, background 0.3s;
+            background: #fafafa;
+        }
+        .upload-area:hover, .upload-area.dragover {
+            border-color: #667eea;
+            background: #f0f0ff;
+        }
+        .upload-icon {
+            font-size: 32px;
+            color: #aaa;
+            font-weight: 300;
+            line-height: 1;
+        }
+        .upload-hint {
+            font-size: 13px;
+            color: #666;
+            margin: 8px 0 4px;
+        }
+        .upload-formats {
+            font-size: 11px;
+            color: #999;
+        }
+        .upload-options {
+            margin-top: 8px;
+        }
+        .checkbox-label {
+            font-size: 13px;
+            color: #555;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+        }
+        .uploaded-files {
+            margin-top: 12px;
+        }
+        .file-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            background: #f5f5f5;
+            border-radius: 6px;
+            margin-bottom: 6px;
+            font-size: 13px;
+        }
+        .file-item .file-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .file-item .file-name {
+            font-weight: 500;
+            color: #333;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .file-item .file-status {
+            font-size: 11px;
+            color: #888;
+        }
+        .file-item .file-preview {
+            font-size: 11px;
+            color: #666;
+            margin-top: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 400px;
+        }
+        .file-item .file-actions button {
+            background: none;
+            border: none;
+            color: #999;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 2px 6px;
+        }
+        .file-item .file-actions button:hover {
+            color: #e74c3c;
+        }
+        .file-item.status-processing {
+            border-left: 3px solid #f39c12;
+        }
+        .file-item.status-completed {
+            border-left: 3px solid #2ecc71;
+        }
+        .file-item.status-failed {
+            border-left: 3px solid #e74c3c;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>QMS 文档生成工具</h1>
         <p class="subtitle">医疗器械质量体系文档智能生成</p>
+
+        <!-- 附件上传区域 -->
+        <div class="upload-section">
+            <div class="section-title">附件上传（可选）</div>
+            <p class="section-desc">上传产品文档，系统将提取内容用于生成更精准的QMS文档</p>
+
+            <div class="upload-area" id="uploadArea">
+                <div class="upload-icon">+</div>
+                <p class="upload-hint">拖拽文件到此处，或点击选择</p>
+                <p class="upload-formats">支持 .docx / .pdf / .txt，最大 10MB</p>
+                <input type="file" id="fileInput" accept=".docx,.pdf,.txt" style="display:none" multiple>
+            </div>
+
+            <div class="upload-options">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="persistCheckbox" checked>
+                    <span>存入知识库（可在后续生成中复用）</span>
+                </label>
+            </div>
+
+            <div class="uploaded-files" id="uploadedFiles"></div>
+        </div>
+
+        <hr class="section-divider">
 
         <form id="docForm">
             <div class="form-group">
@@ -258,7 +399,155 @@
     </div>
 
     <script>
-        // 文档类型描述
+        // ========== 附件上传逻辑 ==========
+        const uploadedFileIds = [];  // 已成功上传的file_id列表
+        const uploadedContents = []; // 临时文本内容(非持久化)
+
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const uploadedFilesDiv = document.getElementById('uploadedFiles');
+
+        // 点击上传区域
+        uploadArea.addEventListener('click', () => fileInput.click());
+
+        // 拖拽事件
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            handleFiles(e.dataTransfer.files);
+        });
+
+        fileInput.addEventListener('change', () => {
+            handleFiles(fileInput.files);
+        });
+
+        function handleFiles(files) {
+            for (const file of files) {
+                uploadFile(file);
+            }
+            fileInput.value = '';
+        }
+
+        async function uploadFile(file) {
+            const persist = document.getElementById('persistCheckbox').checked;
+            const fileId = 'temp_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+
+            // 显示文件卡片
+            const fileItem = document.createElement('div');
+            fileItem.className = 'file-item status-processing';
+            fileItem.id = 'file-' + fileId;
+            fileItem.innerHTML = `
+                <div class="file-info">
+                    <div class="file-name">${escapeHtml(file.name)}</div>
+                    <div class="file-status"><span class="spinner"></span>正在上传提取...</div>
+                </div>
+                <div class="file-actions">
+                    <button onclick="removeFile('${fileId}')" title="移除">x</button>
+                </div>
+            `;
+            uploadedFilesDiv.appendChild(fileItem);
+
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('persist', persist);
+
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.detail || '上传失败');
+                }
+
+                const result = await response.json();
+                const taskId = result.file_id;
+
+                // 轮询提取状态
+                pollExtractStatus(fileId, taskId);
+
+            } catch (error) {
+                updateFileItem(fileId, 'failed', null, error.message);
+            }
+        }
+
+        function pollExtractStatus(localId, taskId) {
+            const timer = setInterval(async () => {
+                try {
+                    const response = await fetch('/api/extract-status/' + taskId);
+                    if (!response.ok) throw new Error('查询失败');
+
+                    const data = await response.json();
+
+                    if (data.status === 'completed') {
+                        clearInterval(timer);
+                        const preview = data.preview || '';
+                        updateFileItem(localId, 'completed', preview, data.char_count + ' 字符');
+
+                        if (data.persisted) {
+                            uploadedFileIds.push(taskId);
+                        }
+                        // 非持久化的内容存入临时文本
+                        if (!data.persisted && data.preview) {
+                            uploadedContents.push(data.preview);
+                        }
+
+                    } else if (data.status === 'failed') {
+                        clearInterval(timer);
+                        updateFileItem(localId, 'failed', null, data.message);
+                    }
+                    // else: 继续轮询
+                } catch (error) {
+                    clearInterval(timer);
+                    updateFileItem(localId, 'failed', null, '查询状态失败');
+                }
+            }, 1500);
+        }
+
+        function updateFileItem(localId, status, preview, message) {
+            const item = document.getElementById('file-' + localId);
+            if (!item) return;
+
+            item.className = 'file-item status-' + status;
+            const statusDiv = item.querySelector('.file-status');
+            const fileInfo = item.querySelector('.file-info');
+
+            if (status === 'completed') {
+                statusDiv.innerHTML = '提取完成 (' + message + ')';
+                if (preview) {
+                    const previewDiv = document.createElement('div');
+                    previewDiv.className = 'file-preview';
+                    previewDiv.textContent = preview;
+                    fileInfo.appendChild(previewDiv);
+                }
+            } else {
+                statusDiv.textContent = message || '提取失败';
+            }
+        }
+
+        function removeFile(localId) {
+            const item = document.getElementById('file-' + localId);
+            if (item) {
+                item.remove();
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // ========== 文档类型描述 ==========
         const docTypeDescriptions = {
             'risk_management_report': '符合ISO 14971/GB 42062的综合风险管理报告，包含概述、风险分析、评估、控制措施、剩余风险评价等完整章节',
             'risk_management_plan': '定义风险管理活动的人员职责、活动安排、评审计划和风险可接受准则',
@@ -292,11 +581,17 @@
 
             const submitBtn = document.getElementById('submitBtn');
 
+            // 收集附件数据
+            const attachmentContent = uploadedContents.length > 0 ? uploadedContents.join('\n\n') : null;
+            const fileIds = uploadedFileIds.length > 0 ? [...uploadedFileIds] : null;
+
             const formData = {
                 doc_type: document.getElementById('docType').value,
                 product_name: document.getElementById('productName').value,
                 product_type: document.getElementById('productType').value,
-                product_params: document.getElementById('productParams').value
+                product_params: document.getElementById('productParams').value,
+                file_ids: fileIds,
+                attachment_content: attachmentContent
             };
 
             if (!formData.doc_type || !formData.product_name || !formData.product_type) {

@@ -1,43 +1,24 @@
 """
-API Routes - 文档生成接口（异步任务模式）
+API Routes - 文档生成接口（异步任务模式）+ 附件上传接口
 """
 
 import uuid
 import threading
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
 from app.services.generator import DocumentGenerator
+from app.services.doc_types import DOC_TYPES, DOC_TYPE_LABELS, SUPPORTED_UPLOAD_FORMATS, MAX_UPLOAD_SIZE_BYTES
+from app.services.attachment_service import (
+    validate_upload, submit_extract_task, get_extract_status
+)
 import io
 import os
 import time
+from typing import Optional, List
 from urllib.parse import quote
 
 router = APIRouter()
-
-# 文档类型枚举
-DOC_TYPES = [
-    # 风险管理类
-    "risk_management_report",      # 风险管理报告
-    "risk_management_plan",       # 风险管理计划
-    "fmea_analysis",              # FMEA分析
-    "risk_acceptance_criteria",    # 风险可接受准则
-    "periodic_risk_evaluation",     # 定期风险评价报告
-    # 设计开发类
-    "design_development_plan",    # 设计和开发计划
-    "design_input",               # 设计输入
-    "design_output",              # 设计输出
-    "design_review",              # 设计评审
-    "design_verification",        # 设计验证
-    "design_validation",          # 设计确认
-    "design_change",              # 设计变更
-    "design_history_file",        # 设计历史文件
-    # 注册申报类
-    "product_spec",               # 产品技术要求
-    # 通用类
-    "instruction",                # 使用说明书
-    "sop"                         # 作业指导书
-]
 
 
 class GenerateRequest(BaseModel):
@@ -46,13 +27,15 @@ class GenerateRequest(BaseModel):
     product_name: str = Field(..., description="产品名称")
     product_type: str = Field(..., description="产品类型，如：有源医疗器械")
     product_params: str = Field("", description="产品参数详情")
+    file_ids: Optional[List[str]] = Field(None, description="已入库附件的file_id列表")
+    attachment_content: Optional[str] = Field(None, description="临时附件的提取文本内容")
 
 
 # 内存中的任务存储
 tasks = {}  # task_id -> {status, progress, message, file_bytes, filename, created_at}
 
 
-def _run_generation(task_id: str, doc_type: str, product_name: str, product_type: str, product_params: str):
+def _run_generation(task_id: str, doc_type: str, product_name: str, product_type: str, product_params: str, file_ids: Optional[List[str]] = None, attachment_content: Optional[str] = None):
     """在后台线程中执行文档生成"""
     try:
         tasks[task_id]["status"] = "generating"
@@ -70,32 +53,16 @@ def _run_generation(task_id: str, doc_type: str, product_name: str, product_type
                     doc_type=doc_type,
                     product_name=product_name,
                     product_type=product_type,
-                    product_params=product_params
+                    product_params=product_params,
+                    file_ids=file_ids,
+                    attachment_content=attachment_content
                 )
             )
         finally:
             loop.close()
 
         # 生成文件名
-        doc_type_labels = {
-            "risk_management_report": "风险管理报告",
-            "risk_management_plan": "风险管理计划",
-            "fmea_analysis": "FMEA分析",
-            "risk_acceptance_criteria": "风险可接受准则",
-            "periodic_risk_evaluation": "定期风险评价",
-            "design_development_plan": "设计开发计划",
-            "design_input": "设计输入",
-            "design_output": "设计输出",
-            "design_review": "设计评审",
-            "design_verification": "设计验证",
-            "design_validation": "设计确认",
-            "design_change": "设计变更",
-            "design_history_file": "设计历史文件",
-            "product_spec": "产品技术要求",
-            "instruction": "使用说明书",
-            "sop": "作业指导书"
-        }
-        label = doc_type_labels.get(doc_type, doc_type)
+        label = DOC_TYPE_LABELS.get(doc_type, doc_type)
         filename = f"{product_name}_{label}.docx"
 
         tasks[task_id]["status"] = "completed"
@@ -142,7 +109,7 @@ async def generate_document(request: GenerateRequest):
     # 启动后台线程
     thread = threading.Thread(
         target=_run_generation,
-        args=(task_id, request.doc_type, request.product_name, request.product_type, request.product_params),
+        args=(task_id, request.doc_type, request.product_name, request.product_type, request.product_params, request.file_ids, request.attachment_content),
         daemon=True
     )
     thread.start()
@@ -218,6 +185,49 @@ async def get_doc_types():
             {"value": "sop", "label": "作业指导书", "category": "通用", "description": "标准操作规程SOP"}
         ]
     }
+
+
+# ==================== 附件上传接口 ====================
+
+@router.post("/upload")
+async def upload_attachment(
+    file: UploadFile = File(..., description="附件文件 (.docx/.pdf/.txt)"),
+    persist: bool = Form(False, description="是否存入知识库供后续复用")
+):
+    """
+    上传附件文档，提交后台提取任务
+
+    返回 file_id，前端通过 GET /api/extract-status/{file_id} 轮询提取进度
+    """
+    # 验证格式和大小
+    file_content = await file.read()
+    is_valid, error_msg = validate_upload(file.filename, len(file_content))
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error_msg)
+
+    # 提交后台提取任务
+    task_id = submit_extract_task(
+        file_content=file_content,
+        filename=file.filename,
+        persist=persist,
+        doc_type="unknown"
+    )
+
+    return {
+        "file_id": task_id,
+        "filename": file.filename,
+        "status": "pending",
+        "message": "文件已接收，正在后台提取文本..."
+    }
+
+
+@router.get("/extract-status/{file_id}")
+async def get_extract_task_status(file_id: str):
+    """查询附件提取任务状态"""
+    status = get_extract_status(file_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+    return status
 
 
 @router.get("/debug/env")

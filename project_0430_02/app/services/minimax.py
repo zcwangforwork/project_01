@@ -10,6 +10,8 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from typing import Optional, List, Dict
 
+from app.services.doc_types import DOC_TYPE_LABELS
+
 # RAG 组件 - 延迟导入避免启动时耗时
 _rag_available = False
 _vector_store = None
@@ -18,6 +20,9 @@ _rag_prompt_builder = None
 # Web 搜索组件 - 延迟初始化
 _web_search_available = None
 _web_search_service = None
+
+# 跨 collection 检索 — uploads collection 是否可用
+_uploads_collection_available = None
 
 
 def _try_init_web_search():
@@ -540,21 +545,13 @@ class MiniMaxService:
         doc_type: str,
         product_name: str,
         product_type: str,
-        product_params: str = ""
+        product_params: str = "",
+        attachment_content: str = ""
     ) -> str:
         """
         分章节生成文档内容并汇总
 
         流程：获取章节结构 -> 逐章生成内容 -> 汇总成完整文档
-
-        Args:
-            doc_type: 文档类型
-            product_name: 产品名称
-            product_type: 产品类型
-            product_params: 产品参数
-
-        Returns:
-            AI生成的完整文档内容（Markdown格式）
         """
         if not self.api_key:
             raise ValueError("MINIMAX_API_KEY 未设置，请联系管理员配置")
@@ -564,25 +561,7 @@ class MiniMaxService:
 
         # 分章节生成
         full_document = []
-        doc_type_names = {
-            "risk_management_report": "风险管理报告",
-            "risk_management_plan": "风险管理计划",
-            "fmea_analysis": "FMEA分析报告",
-            "risk_acceptance_criteria": "风险可接受准则",
-            "periodic_risk_evaluation": "定期风险评价报告",
-            "design_development_plan": "设计和开发计划",
-            "design_input": "设计输入",
-            "design_output": "设计输出",
-            "design_review": "设计评审",
-            "design_verification": "设计验证",
-            "design_validation": "设计确认",
-            "design_change": "设计变更",
-            "design_history_file": "设计历史文件",
-            "product_spec": "产品技术要求",
-            "instruction": "使用说明书",
-            "sop": "作业指导书"
-        }
-        doc_name = doc_type_names.get(doc_type, doc_type)
+        doc_name = DOC_TYPE_LABELS.get(doc_type, doc_type)
 
         # 添加文档标题
         full_document.append(f"# {product_name} - {doc_name}\n\n")
@@ -590,6 +569,8 @@ class MiniMaxService:
         full_document.append(f"- 产品名称：{product_name}\n")
         full_document.append(f"- 产品类型：{product_type}\n")
         full_document.append(f"- 产品参数：{product_params if product_params else '无'}\n")
+        if attachment_content:
+            full_document.append(f"\n**附件材料：** 已提供产品相关参考文档\n")
         full_document.append("---\n\n")
 
         print(f"开始分章节生成文档（共 {len(chapters)} 章）...")
@@ -600,9 +581,9 @@ class MiniMaxService:
 
             print(f"  [{i}/{len(chapters)}] 生成章节：{chapter_name}...")
 
-            # 1. 尝试RAG增强（如可用）
+            # 1. 尝试RAG增强（如可用）— 检索 all collection
             chunks = []
-            if _rag_available:
+            if self.use_rag:
                 for attempt in range(2):  # 重试1次
                     try:
                         vector_store = _vector_store()
@@ -620,6 +601,24 @@ class MiniMaxService:
                             print(f"    RAG检索首次失败，重试中: {e}")
                             continue
                         print(f"    [WARNING] RAG检索最终失败，回退到无RAG模式: {e}")
+
+            # 1b. 跨collection检索 — 检索 uploads collection（用户上传的附件）
+            uploads_chunks = []
+            try:
+                from app.services.rag.vector_store import VectorStore
+                uploads_vs = VectorStore(collection_name="uploads")
+                if uploads_vs.count() > 0:
+                    uploads_chunks = uploads_vs.retrieve_hybrid(
+                        doc_type=doc_type,
+                        query=chapter_query,
+                        top_k=5,
+                        similarity_threshold=0.3,
+                        vector_weight=0.7
+                    )
+                    if uploads_chunks:
+                        print(f"    附件检索: 从uploads collection检索到 {len(uploads_chunks)} 条相关段落")
+            except Exception as e:
+                pass  # uploads collection 不可用时静默跳过
 
             # 2. 尝试Web搜索补充（如可用）- 增强版
             web_info = ""
@@ -653,25 +652,50 @@ class MiniMaxService:
                 chapter=chapter_name
             )
 
-            # 4. 注入RAG上下文（如检索到相关内容）
-            if chunks:
+            # 4. 注入RAG上下文（如检索到相关内容）— 合并 all + uploads
+            all_chunks = list(chunks) if chunks else []
+            if uploads_chunks:
+                all_chunks.extend(uploads_chunks)
+            if all_chunks and self.use_rag and _rag_prompt_builder:
                 enhanced_prompt = _rag_prompt_builder(
                     base_prompt=base_prompt,
                     doc_type=doc_type,
                     product_name=product_name,
                     product_type=product_type,
                     product_params=product_params,
-                    retrieved_chunks=chunks
+                    retrieved_chunks=all_chunks
                 )
-                print(f"    RAG增强: 检索到 {len(chunks)} 条相关段落")
+                print(f"    RAG增强: 检索到 {len(all_chunks)} 条相关段落 (all:{len(chunks)}, uploads:{len(uploads_chunks)})")
+            elif all_chunks:
+                # 有 chunks 但 RAG builder 不可用 — 直接追加为参考文本
+                chunk_texts = "\n---\n".join(
+                    c.get("text", "") for c in all_chunks[:5]
+                )
+                enhanced_prompt = base_prompt + "\n\n【参考文档片段】\n" + chunk_texts
+                print(f"    直接注入: {len(all_chunks)} 条参考段落 (all:{len(chunks)}, uploads:{len(uploads_chunks)})")
             else:
                 enhanced_prompt = base_prompt
 
-            # 5. 注入Web搜索上下文（如获取到相关内容）
+            # 5. 注入附件内容 — 第一章全文注入，后续章节关键词匹配
+            if attachment_content:
+                if i == 1:
+                    # 第一章：注入完整附件文本作为产品背景
+                    enhanced_prompt = enhanced_prompt.rstrip() + "\n\n" + \
+                        "【附件文档 - 产品背景信息】\n" + \
+                        "以下内容来自用户上传的产品相关文档，请充分利用这些信息生成内容：\n" + \
+                        attachment_content[:3000] + "\n"  # 限制3000字避免超token
+                else:
+                    # 后续章节：简单关键词匹配注入相关段落
+                    relevant = self._match_relevant_paragraphs(attachment_content, chapter_query, max_chars=1500)
+                    if relevant:
+                        enhanced_prompt = enhanced_prompt.rstrip() + "\n\n" + \
+                            "【附件文档 - 相关段落】\n" + relevant + "\n"
+
+            # 6. 注入Web搜索上下文（如获取到相关内容）
             if web_info:
                 enhanced_prompt = enhanced_prompt.rstrip() + "\n\n" + "【相关法规标准 - 来自网络搜索】\n" + web_info + "\n"
 
-            # 6. 生成章节内容
+            # 7. 生成章节内容
             try:
                 chapter_content = self._call_api(enhanced_prompt)
                 full_document.append(f"## 第{i}章 {chapter_name}\n\n")
@@ -768,7 +792,8 @@ class MiniMaxService:
         doc_type: str,
         product_name: str,
         product_type: str,
-        product_params: str = ""
+        product_params: str = "",
+        attachment_content: str = ""
     ) -> str:
         """
         生成文档内容（分章节生成模式，统一入口）
@@ -778,7 +803,7 @@ class MiniMaxService:
         try:
             # 统一使用分章节生成模式
             return self._generate_by_chapters(
-                doc_type, product_name, product_type, product_params
+                doc_type, product_name, product_type, product_params, attachment_content
             )
         except Exception as e:
             return self._generate_placeholder(doc_type, product_name, product_type, product_params, str(e))
@@ -792,26 +817,7 @@ class MiniMaxService:
         error: str
     ) -> str:
         """生成占位符内容（当API不可用时）"""
-        doc_type_names = {
-            "risk_management_report": "风险管理报告",
-            "risk_management_plan": "风险管理计划",
-            "fmea_analysis": "FMEA分析报告",
-            "risk_acceptance_criteria": "风险可接受准则",
-            "periodic_risk_evaluation": "定期风险评价报告",
-            "design_development_plan": "设计和开发计划",
-            "design_input": "设计输入",
-            "design_output": "设计输出",
-            "design_review": "设计评审",
-            "design_verification": "设计验证",
-            "design_validation": "设计确认",
-            "design_change": "设计变更",
-            "design_history_file": "设计历史文件",
-            "product_spec": "产品技术要求",
-            "instruction": "使用说明书",
-            "sop": "作业指导书"
-        }
-
-        return f"""# {product_name} - {doc_type_names.get(doc_type, doc_type)}
+        return f"""# {product_name} - {DOC_TYPE_LABELS.get(doc_type, doc_type)}
 
 **产品信息：**
 - 产品名称：{product_name}
@@ -827,6 +833,60 @@ class MiniMaxService:
 ---
 *由 QMS Document Generator 自动生成 | {doc_type}*
 """
+
+    def _match_relevant_paragraphs(self, text: str, query: str, max_chars: int = 1500) -> str:
+        """
+        从文本中简单关键词匹配并返回与查询相关的段落
+
+        Args:
+            text: 完整文本
+            query: 查询关键词
+            max_chars: 返回最大字符数
+
+        Returns:
+            匹配到的相关段落文本
+        """
+        if not text or not query:
+            return ""
+
+        # 提取关键词（简单分词）
+        keywords = [w.strip() for w in query.replace(" ", "").split("_") if w.strip()]
+        if not keywords:
+            return ""
+
+        # 按段落分割
+        paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
+        if not paragraphs:
+            return ""
+
+        # 为每个段落打分
+        scored = []
+        for para in paragraphs:
+            score = 0
+            para_lower = para.lower()
+            for kw in keywords:
+                for char in kw:
+                    if char in para_lower:
+                        score += 1
+            if score > 0:
+                scored.append((score, para))
+
+        # 按分数排序，取前几个
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        result = []
+        total_chars = 0
+        for _, para in scored:
+            if total_chars + len(para) > max_chars:
+                # 截断最后一段以不超过限制
+                remaining = max_chars - total_chars
+                if remaining > 50:
+                    result.append(para[:remaining] + "...")
+                break
+            result.append(para)
+            total_chars += len(para) + 2
+
+        return "\n\n".join(result) if result else ""
 
     def _add_files_to_knowledge_base(self, file_paths: List[str], doc_type: str):
         """

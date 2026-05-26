@@ -9,6 +9,7 @@ from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
+from app.services.doc_types import DOC_TYPE_LABELS
 
 # 模板目录
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "..", "templates")
@@ -106,25 +107,7 @@ class TemplateService:
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
         # 添加文档类型副标题
-        doc_type_names = {
-            "risk_management_report": "风险管理报告",
-            "risk_management_plan": "风险管理计划",
-            "fmea_analysis": "FMEA分析报告",
-            "risk_acceptance_criteria": "风险可接受准则",
-            "periodic_risk_evaluation": "定期风险评价报告",
-            "design_development_plan": "设计和开发计划",
-            "design_input": "设计输入",
-            "design_output": "设计输出",
-            "design_review": "设计评审",
-            "design_verification": "设计验证",
-            "design_validation": "设计确认",
-            "design_change": "设计变更",
-            "design_history_file": "设计历史文件",
-            "product_spec": "产品技术要求",
-            "instruction": "使用说明书",
-            "sop": "作业指导书"
-        }
-        subtitle = doc.add_paragraph(doc_type_names.get(doc_type, doc_type))
+        subtitle = doc.add_paragraph(DOC_TYPE_LABELS.get(doc_type, doc_type))
         subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
         doc.add_paragraph()  # 空行
