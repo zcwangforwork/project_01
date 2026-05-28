@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
 from app.services.generator import DocumentGenerator
-from app.services.doc_types import DOC_TYPES, DOC_TYPE_LABELS, SUPPORTED_UPLOAD_FORMATS, MAX_UPLOAD_SIZE_BYTES
+from app.services.doc_types import DOC_TYPE_LABELS, SUPPORTED_UPLOAD_FORMATS, MAX_UPLOAD_SIZE_BYTES
 from app.services.attachment_service import (
     validate_upload, submit_extract_task, get_extract_status
 )
@@ -25,7 +25,7 @@ class GenerateRequest(BaseModel):
     """文档生成请求"""
     doc_type: str = Field(..., description="文档类型")
     product_name: str = Field(..., description="产品名称")
-    product_type: str = Field(..., description="产品类型，如：有源医疗器械")
+    product_type: str = Field(default="", description="产品类型，如：有源医疗器械")
     product_params: str = Field("", description="产品参数详情")
     file_ids: Optional[List[str]] = Field(None, description="已入库附件的file_id列表")
     attachment_content: Optional[str] = Field(None, description="临时附件的提取文本内容")
@@ -84,13 +84,6 @@ async def generate_document(request: GenerateRequest):
 
     立即返回任务ID，文档在后台生成，前端通过 /api/status/{task_id} 轮询进度
     """
-    # 验证 doc_type
-    if request.doc_type not in DOC_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"无效的文档类型。可选值: {', '.join(DOC_TYPES)}"
-        )
-
     # 验证必填字段
     if not request.product_name.strip():
         raise HTTPException(status_code=400, detail="产品名称不能为空")

@@ -151,6 +151,95 @@
             margin-top: 4px;
         }
 
+        /* ========== 自定义组合框样式 ========== */
+        .combo-box {
+            position: relative;
+            width: 100%;
+        }
+        .combo-input {
+            width: 100%;
+            padding: 12px 36px 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: border-color 0.3s;
+            cursor: pointer;
+            background: white;
+        }
+        .combo-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .combo-arrow {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            pointer-events: none;
+            color: #999;
+            font-size: 12px;
+            transition: transform 0.2s;
+        }
+        .combo-box.open .combo-arrow {
+            transform: translateY(-50%) rotate(180deg);
+        }
+        .combo-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            margin-top: 4px;
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+            max-height: 320px;
+            overflow-y: auto;
+            z-index: 1000;
+            display: none;
+        }
+        .combo-box.open .combo-dropdown {
+            display: block;
+        }
+        .combo-group-label {
+            padding: 8px 14px 4px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #667eea;
+            text-transform: none;
+            letter-spacing: 0;
+        }
+        .combo-option {
+            padding: 9px 14px;
+            font-size: 14px;
+            color: #333;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .combo-option:hover,
+        .combo-option.highlighted {
+            background: #f0f0ff;
+            color: #4f46e5;
+        }
+        .combo-option.empty {
+            color: #999;
+            cursor: default;
+            text-align: center;
+            padding: 16px 14px;
+        }
+        .combo-option.empty:hover {
+            background: transparent;
+            color: #999;
+        }
+        .combo-custom-hint {
+            padding: 8px 14px;
+            font-size: 12px;
+            color: #999;
+            border-top: 1px solid #f0f0f0;
+            text-align: center;
+        }
+
         .footer {
             text-align: center;
             margin-top: 20px;
@@ -343,33 +432,11 @@
         <form id="docForm">
             <div class="form-group">
                 <label for="docType">文档类型 <span class="required">*</span></label>
-                <select id="docType" name="docType" required>
-                    <option value="">请选择文档类型</option>
-                    <optgroup label="【风险管理类】">
-                        <option value="risk_management_report">风险管理报告</option>
-                        <option value="risk_management_plan">风险管理计划</option>
-                        <option value="fmea_analysis">FMEA分析报告</option>
-                        <option value="risk_acceptance_criteria">风险可接受准则</option>
-                        <option value="periodic_risk_evaluation">定期风险评价报告</option>
-                    </optgroup>
-                    <optgroup label="【设计开发类】">
-                        <option value="design_development_plan">设计和开发计划</option>
-                        <option value="design_input">设计输入</option>
-                        <option value="design_output">设计输出</option>
-                        <option value="design_review">设计评审</option>
-                        <option value="design_verification">设计验证</option>
-                        <option value="design_validation">设计确认</option>
-                        <option value="design_change">设计变更</option>
-                        <option value="design_history_file">设计历史文件(DHF)</option>
-                    </optgroup>
-                    <optgroup label="【注册申报类】">
-                        <option value="product_spec">产品技术要求</option>
-                    </optgroup>
-                    <optgroup label="【通用类】">
-                        <option value="instruction">使用说明书</option>
-                        <option value="sop">作业指导书</option>
-                    </optgroup>
-                </select>
+                <div class="combo-box" id="docTypeCombo">
+                    <input type="text" class="combo-input" id="docType" name="docType" placeholder="选择或输入文档类型" required autocomplete="off">
+                    <span class="combo-arrow">&#9662;</span>
+                    <div class="combo-dropdown" id="docTypeDropdown"></div>
+                </div>
                 <div class="doc-type-desc" id="docTypeDesc">请选择要生成的文档类型</div>
             </div>
 
@@ -379,8 +446,8 @@
             </div>
 
             <div class="form-group">
-                <label for="productType">产品类型 <span class="required">*</span></label>
-                <input type="text" id="productType" name="productType" placeholder="例如：有源医疗器械、植入器械" required>
+                <label for="productType">产品类型</label>
+                <input type="text" id="productType" name="productType" placeholder="例如：有源医疗器械、植入器械">
             </div>
 
             <div class="form-group">
@@ -569,13 +636,213 @@
 
         let pollTimer = null;
 
-        // 更新文档类型描述
-        document.getElementById('docType').addEventListener('change', function() {
-            const desc = docTypeDescriptions[this.value] || '请选择要生成的文档类型';
-            document.getElementById('docTypeDesc').textContent = desc;
+        // ========== 自定义组合框 ==========
+        const docTypeGroups = [
+            {
+                label: '风险管理类',
+                options: [
+                    { label: '风险管理报告', value: 'risk_management_report' },
+                    { label: '风险管理计划', value: 'risk_management_plan' },
+                    { label: 'FMEA分析报告', value: 'fmea_analysis' },
+                    { label: '风险可接受准则', value: 'risk_acceptance_criteria' },
+                    { label: '定期风险评价报告', value: 'periodic_risk_evaluation' }
+                ]
+            },
+            {
+                label: '设计开发类',
+                options: [
+                    { label: '设计和开发计划', value: 'design_development_plan' },
+                    { label: '设计输入', value: 'design_input' },
+                    { label: '设计输出', value: 'design_output' },
+                    { label: '设计评审', value: 'design_review' },
+                    { label: '设计验证', value: 'design_verification' },
+                    { label: '设计确认', value: 'design_validation' },
+                    { label: '设计变更', value: 'design_change' },
+                    { label: '设计历史文件(DHF)', value: 'design_history_file' }
+                ]
+            },
+            {
+                label: '注册申报类',
+                options: [
+                    { label: '产品技术要求', value: 'product_spec' }
+                ]
+            },
+            {
+                label: '通用类',
+                options: [
+                    { label: '使用说明书', value: 'instruction' },
+                    { label: '作业指导书', value: 'sop' }
+                ]
+            }
+        ];
+
+        // 文档类型中文标签到英文key的映射
+        const docTypeLabelToKey = {};
+        docTypeGroups.forEach(group => {
+            group.options.forEach(opt => {
+                docTypeLabelToKey[opt.label] = opt.value;
+            });
         });
 
-        // 表单提交
+        const comboBox = document.getElementById('docTypeCombo');
+        const comboInput = document.getElementById('docType');
+        const comboDropdown = document.getElementById('docTypeDropdown');
+        let highlightedIndex = -1;
+        let filteredOptions = [];
+
+        function getAllOptions() {
+            const all = [];
+            docTypeGroups.forEach(group => {
+                group.options.forEach(opt => {
+                    all.push(opt);
+                });
+            });
+            return all;
+        }
+
+        function filterOptions(query) {
+            const q = query.toLowerCase();
+            const result = [];
+            docTypeGroups.forEach(group => {
+                const matched = group.options.filter(opt => opt.label.toLowerCase().includes(q));
+                if (matched.length > 0) {
+                    result.push({ label: group.label, options: matched });
+                }
+            });
+            return result;
+        }
+
+        function renderDropdown(filtered) {
+            comboDropdown.innerHTML = '';
+            if (filtered.length === 0) {
+                comboDropdown.innerHTML = '<div class="combo-option empty">按 Enter 使用自定义输入</div>';
+                filteredOptions = [];
+                return;
+            }
+
+            let flatIndex = 0;
+            filteredOptions = [];
+            filtered.forEach(group => {
+                const groupLabel = document.createElement('div');
+                groupLabel.className = 'combo-group-label';
+                groupLabel.textContent = group.label;
+                comboDropdown.appendChild(groupLabel);
+
+                group.options.forEach(opt => {
+                    const div = document.createElement('div');
+                    div.className = 'combo-option';
+                    div.textContent = opt.label;
+                    div.dataset.value = opt.value;
+                    div.dataset.index = flatIndex;
+                    div.addEventListener('mousedown', function(e) {
+                        e.preventDefault();
+                        selectOption(opt);
+                    });
+                    comboDropdown.appendChild(div);
+                    filteredOptions.push(opt);
+                    flatIndex++;
+                });
+            });
+
+            comboDropdown.insertAdjacentHTML('beforeend',
+                '<div class="combo-custom-hint">输入自定义类型后按 Enter 确认</div>');
+        }
+
+        function selectOption(opt) {
+            comboInput.value = opt.label;
+            comboBox.classList.remove('open');
+            updateDocTypeDesc(opt.value);
+        }
+
+        function updateDocTypeDesc(key) {
+            const desc = docTypeDescriptions[key] || '自定义文档类型 - 将使用默认模板生成';
+            document.getElementById('docTypeDesc').textContent = desc;
+        }
+
+        function resolveDocType(inputValue) {
+            const trimmed = inputValue.trim();
+            if (docTypeLabelToKey[trimmed]) {
+                return docTypeLabelToKey[trimmed];
+            }
+            return trimmed;
+        }
+
+        function setHighlight(index) {
+            const items = comboDropdown.querySelectorAll('.combo-option:not(.empty)');
+            items.forEach(item => item.classList.remove('highlighted'));
+            if (index >= 0 && index < items.length) {
+                items[index].classList.add('highlighted');
+                items[index].scrollIntoView({ block: 'nearest' });
+                highlightedIndex = index;
+            } else {
+                highlightedIndex = -1;
+            }
+        }
+
+        function openDropdown() {
+            const filtered = filterOptions(comboInput.value);
+            renderDropdown(filtered);
+            comboBox.classList.add('open');
+            highlightedIndex = -1;
+        }
+
+        function closeDropdown() {
+            comboBox.classList.remove('open');
+            highlightedIndex = -1;
+        }
+
+        // Input events
+        comboInput.addEventListener('focus', function() {
+            openDropdown();
+        });
+
+        comboInput.addEventListener('input', function() {
+            openDropdown();
+            updateDocTypeDesc(resolveDocType(this.value));
+        });
+
+        comboInput.addEventListener('keydown', function(e) {
+            const items = comboDropdown.querySelectorAll('.combo-option:not(.empty)');
+
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (!comboBox.classList.contains('open')) {
+                    openDropdown();
+                }
+                setHighlight(Math.min(highlightedIndex + 1, items.length - 1));
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (!comboBox.classList.contains('open')) {
+                    openDropdown();
+                }
+                setHighlight(Math.max(highlightedIndex - 1, -1));
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                if (comboBox.classList.contains('open') && highlightedIndex >= 0 && highlightedIndex < filteredOptions.length) {
+                    selectOption(filteredOptions[highlightedIndex]);
+                } else {
+                    // Use custom input value
+                    closeDropdown();
+                    updateDocTypeDesc(resolveDocType(comboInput.value));
+                }
+            } else if (e.key === 'Escape') {
+                closeDropdown();
+            }
+        });
+
+        // Click outside to close
+        document.addEventListener('click', function(e) {
+            if (!comboBox.contains(e.target)) {
+                closeDropdown();
+            }
+        });
+
+        // Update description on input change (fallback)
+        comboInput.addEventListener('change', function() {
+            updateDocTypeDesc(resolveDocType(this.value));
+        });
+
+        // ========== 表单提交 ==========
         document.getElementById('docForm').addEventListener('submit', async function(e) {
             e.preventDefault();
 
@@ -585,8 +852,9 @@
             const attachmentContent = uploadedContents.length > 0 ? uploadedContents.join('\n\n') : null;
             const fileIds = uploadedFileIds.length > 0 ? [...uploadedFileIds] : null;
 
+            const rawDocType = document.getElementById('docType').value;
             const formData = {
-                doc_type: document.getElementById('docType').value,
+                doc_type: resolveDocType(rawDocType),
                 product_name: document.getElementById('productName').value,
                 product_type: document.getElementById('productType').value,
                 product_params: document.getElementById('productParams').value,
@@ -594,7 +862,7 @@
                 attachment_content: attachmentContent
             };
 
-            if (!formData.doc_type || !formData.product_name || !formData.product_type) {
+            if (!formData.doc_type || !formData.product_name) {
                 showStatus('请填写所有必填项', 'error');
                 return;
             }

@@ -725,7 +725,7 @@ class MiniMaxService:
         }
 
         payload = {
-            "model": "Doubao-Seed-2.0-pro",
+            "model": "DeepSeek-V4-Pro",
             "messages": [
                 {
                     "role": "user",

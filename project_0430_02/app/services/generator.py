@@ -5,7 +5,7 @@ Document Generator - 文档生成协调服务
 import asyncio
 from app.services.minimax import MiniMaxService
 from app.services.template import TemplateService
-from app.services.doc_types import DOC_TYPES
+
 from app.services.attachment_service import resolve_attachment_content
 from typing import Optional, List
 
@@ -105,11 +105,5 @@ class DocumentGenerator:
         product_type: str
     ):
         """验证输入参数"""
-        if doc_type not in DOC_TYPES:
-            raise ValueError(f"无效的文档类型: {doc_type}，可选值: {', '.join(DOC_TYPES)}")
-
         if not product_name or not product_name.strip():
             raise ValueError("产品名称不能为空")
-
-        if not product_type or not product_type.strip():
-            raise ValueError("产品类型不能为空")
