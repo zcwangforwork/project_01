@@ -8,6 +8,7 @@ Ingest - 文档摄入脚本
 import os
 import sys
 import json
+import shutil
 import hashlib
 from pathlib import Path
 from typing import Optional, List, Tuple
@@ -113,7 +114,93 @@ def extract_text_from_docx(docx_path: str) -> List[Tuple[str, str]]:
     return paragraphs
 
 
-def extract_text_from_pdf(pdf_path: str) -> List[Tuple[str, str]]:
+def _get_tesseract_path() -> str:
+    """获取 tesseract 可执行文件路径"""
+    import shutil
+    # 尝试多个已知路径
+    candidates = [
+        r"E:\tesseract\tesseract.exe",
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        shutil.which("tesseract"),
+    ]
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path
+    return "tesseract"
+
+
+def extract_text_from_pdf_ocr(
+    pdf_path: str,
+    dpi: int = 200,
+    max_pages: int = 30,
+    lang: str = "chi_sim+eng"
+) -> List[Tuple[str, str]]:
+    """
+    使用 OCR 从扫描版 PDF 中提取文本
+
+    Args:
+        pdf_path: PDF 文件路径
+        dpi: 渲染分辨率（越高越清晰但越慢）
+        max_pages: 最大处理页数
+        lang: OCR 语言
+
+    Returns:
+        [(section_title, paragraph_text), ...] 列表
+    """
+    try:
+        import fitz
+        import pytesseract
+        from PIL import Image
+        import io
+    except ImportError as e:
+        print(f"  [OCR] 缺少依赖: {e}")
+        return []
+
+    pytesseract.pytesseract.tesseract_cmd = _get_tesseract_path()
+
+    paragraphs = []
+    blank_pages = 0
+
+    try:
+        doc = fitz.open(pdf_path)
+        pages_to_process = min(doc.page_count, max_pages)
+
+        for page_num in range(pages_to_process):
+            try:
+                page = doc[page_num]
+                pix = page.get_pixmap(dpi=dpi)
+                img = Image.open(io.BytesIO(pix.tobytes("png")))
+                text = pytesseract.image_to_string(img, lang=lang)
+
+                if text and len(text.strip()) > 20:
+                    lines = text.strip().split("\n")
+                    current_section = f"第{page_num + 1}页"
+                    for line in lines:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        if len(line) < 80 and not line.endswith((".", "。", "）", ")")):
+                            current_section = line
+                        else:
+                            paragraphs.append((current_section, line))
+                    blank_pages = 0
+                else:
+                    blank_pages += 1
+                    # 连续5页空白则停止
+                    if blank_pages >= 5:
+                        break
+            except Exception:
+                continue
+
+        doc.close()
+    except Exception as e:
+        print(f"  [OCR] PDF 处理失败: {e}")
+
+    return paragraphs
+
+
+def extract_text_from_pdf(pdf_path: str, enable_ocr: bool = True) -> List[Tuple[str, str]]:
     """
     从 .pdf 文件提取文本内容
 
@@ -160,7 +247,9 @@ def extract_text_from_pdf(pdf_path: str) -> List[Tuple[str, str]]:
                         else:
                             paragraphs.append((current_section, line))
 
-            return paragraphs
+            # pdfplumber 提取到文本才返回，否则继续尝试 PyPDF2 和 OCR
+            if paragraphs:
+                return paragraphs
 
     except ImportError:
         pass
@@ -181,6 +270,14 @@ def extract_text_from_pdf(pdf_path: str) -> List[Tuple[str, str]]:
                             paragraphs.append((current_section, line))
     except Exception as e:
         print(f"  [PDF] 读取失败: {e}")
+
+    # OCR 回退：如果直接提取无文本，尝试 OCR
+    if not paragraphs and enable_ocr:
+        print(f"  [PDF] 直接提取无文本，尝试 OCR...")
+        ocr_paragraphs = extract_text_from_pdf_ocr(pdf_path)
+        if ocr_paragraphs:
+            print(f"  [OCR] 成功提取 {len(ocr_paragraphs)} 段文本")
+        return ocr_paragraphs
 
     return paragraphs
 
@@ -222,6 +319,75 @@ def extract_text_from_doc(doc_path: str) -> List[Tuple[str, str]]:
     except Exception as e:
         print(f"  [DOC] 读取失败: {e}")
         return []
+
+
+def extract_text_from_xlsx(xlsx_path: str) -> List[Tuple[str, str]]:
+    """
+    从 .xlsx 文件提取文本内容
+
+    Args:
+        xlsx_path: .xlsx 文件路径
+
+    Returns:
+        [(section_title, paragraph_text), ...] 列表
+    """
+    try:
+        import openpyxl
+    except ImportError:
+        print(f"  [XLSX] 需要安装 openpyxl: pip install openpyxl")
+        return []
+
+    paragraphs = []
+    try:
+        wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            sheet_title = f"[工作表: {sheet_name}]"
+            rows_text = []
+            for row in ws.iter_rows(values_only=True):
+                row_values = [str(cell) for cell in row if cell is not None]
+                if row_values:
+                    row_text = " | ".join(row_values)
+                    rows_text.append(row_text)
+            if rows_text:
+                paragraphs.append((sheet_title, "\n".join(rows_text)))
+        wb.close()
+    except Exception as e:
+        print(f"  [XLSX] 读取失败: {e}")
+
+    return paragraphs
+
+
+def extract_text_from_md(md_path: str) -> List[Tuple[str, str]]:
+    """
+    从 .md 文件提取文本内容
+    """
+    paragraphs = []
+    current_section = ""
+    encodings = ['utf-8', 'gbk', 'gb18030', 'latin1']
+
+    for encoding in encodings:
+        try:
+            with open(md_path, 'r', encoding=encoding) as f:
+                lines = f.readlines()
+
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                # Markdown 标题作为 section
+                if line.startswith("#"):
+                    current_section = line.lstrip("#").strip()
+                else:
+                    paragraphs.append((current_section, line))
+            return paragraphs
+        except UnicodeDecodeError:
+            continue
+        except Exception as e:
+            print(f"  [MD] 读取失败: {e}")
+            return []
+
+    return paragraphs
 
 
 def extract_text_from_txt(txt_path: str) -> List[Tuple[str, str]]:
@@ -284,6 +450,10 @@ def extract_text_from_file(file_path: str) -> List[Tuple[str, str]]:
         return extract_text_from_doc(file_path)
     elif ext == '.txt':
         return extract_text_from_txt(file_path)
+    elif ext == '.xlsx':
+        return extract_text_from_xlsx(file_path)
+    elif ext == '.md':
+        return extract_text_from_md(file_path)
     else:
         print(f"  [SKIP] 不支持的文件格式: {ext}")
         return []
@@ -381,7 +551,7 @@ def generate_chunk_id(source_file: str, chunk_index: int) -> str:
 def get_supported_files(root_dir: str) -> List[str]:
     """递归获取目录下所有支持的文件"""
     supported_files = []
-    supported_exts = ['.docx', '.pdf', '.doc', '.txt']
+    supported_exts = ['.docx', '.pdf', '.doc', '.txt', '.xlsx', '.md']
 
     for root, dirs, files in os.walk(root_dir):
         # 跳过隐藏目录

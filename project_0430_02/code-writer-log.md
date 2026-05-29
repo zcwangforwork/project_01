@@ -64,3 +64,69 @@
 - Topic: 知识库重建结果
 - Finding: 最终向量库 650 chunks, 172 个来源文件。检索验证通过，4 个测试查询均有相关结果返回（相似度 0.43-0.53）
 - Decision: 重建完成，可以投入使用
+
+## 2026-05-29 15:00:00 - 任务开始：贴敷式胰岛素泵知识库向量化
+
+### 任务描述
+将 `贴敷式胰岛素泵知识库` 目录（25个子目录，779个文件）中的所有文档转化为向量，存入独立的 ChromaDB 目录，供项目 RAG 检索使用。
+
+### 修改的文件
+
+#### 1. `app/services/rag/ingest.py` - 扩展文档格式支持
+- **变更**: 添加 `extract_text_from_xlsx()` 和 `extract_text_from_md()` 函数
+- **变更**: 更新 `extract_text_from_file()` 支持 .xlsx 和 .md 格式
+- **变更**: 更新 `get_supported_files()` 扩展名列表包含 .xlsx 和 .md
+- **原因**: 知识库中包含 xlsx 和 md 文件需要处理
+
+#### 2. `app/services/rag/vector_store.py` - 支持多目录查询
+- **变更**: 添加 `EXTRA_DB_CONFIG` 类变量和 `_extra_clients` 缓存
+- **变更**: 添加 `_get_client_for_path()` 和 `set_extra_db_config()` 类方法
+- **变更**: 修改 `retrieve()`、`retrieve_hybrid()` 方法遍历所有 DB 目录的 collection
+- **变更**: 修改 `_bm25_search_collection()` 接受 client 参数
+- **变更**: 修改 `count()` 方法统计所有 DB 目录
+- **原因**: 需要从多个 ChromaDB 目录查询，新知识库存放在独立目录
+
+#### 3. `app/main.py` - 启动时自动加载胰岛素泵知识库
+- **变更**: 添加启动时检测 `chroma_db_insulin_pump` 目录并配置 EXTRA_DB_CONFIG
+- **原因**: 确保 RAG 服务启动时自动包含新知识库
+
+#### 4. `build_insulin_pump_kb.py` (新建) - 知识库摄入脚本
+- **内容**: 完整的知识库构建脚本，包含文件扫描、文本提取、向量生成、ChromaDB 写入
+- **功能**: 25个子目录映射到24种文档类型，跳过扫描版PDF，自动测试检索
+
+### 执行结果
+
+#### 摄入统计
+- 源目录: `贴敷式胰岛素泵知识库`
+- 向量库目录: `chroma_db_insulin_pump` (独立于现有的 `chroma_db`)
+- Collection 名称: `insulin_pump_kb`
+- 总文件数: 777 (排除2个不支持的PPT格式)
+- 成功处理: 390 个文件
+- 失败/跳过: 387 个 (主要是扫描版PDF无文本、少数损坏文件和临时文件)
+- 总 chunks: 6,782
+- 总耗时: 4,778秒 (79.6分钟)
+- DB 大小: 119MB
+
+#### 文档类型分布 (Top 10)
+| doc_type | chunks |
+|---|---|
+| biocompatibility | 1,272 |
+| medical_electrical_safety | 854 |
+| software_usability | 785 |
+| quality_management | 736 |
+| sterilization | 649 |
+| ghtf_guidelines | 492 |
+| product_registration | 220 |
+| labeling | 220 |
+| emc | 202 |
+| transport_packaging | 179 |
+
+#### 检索测试结果
+所有测试查询均返回高相关性结果 (相似度 0.62-0.78):
+- "胰岛素泵电气安全基本要求" → IEC 60601 系列标准
+- "风险管理报告编写指南" → ISO 14971 风险管理标准
+- "电磁兼容测试方法" → IEC 61000-4 EMC 测试标准
+- "无菌包装验证流程" → 包装验证方案文档
+
+### 架构说明
+查询流程: VectorStore.retrieve() → 遍历主DB (chroma_db) 的 QUERY_COLLECTIONS + 额外DB (chroma_db_insulin_pump) 的 EXTRA_DB_CONFIG → 合并结果按相似度排序

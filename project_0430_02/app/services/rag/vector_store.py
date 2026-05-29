@@ -22,11 +22,15 @@ class VectorStore:
     """ChromaDB 向量存储封装"""
 
     # ChromaDB 持久化目录
-    BASE_DIR = Path(__file__).parent.parent.parent.parent / "chroma_db"
+    BASE_DIR = Path(__file__).parent.parent.parent.parent / "chroma_db_insulin_pump"
     COLLECTION_NAME_PREFIX = "qms_doc_"
 
     # 查询时使用的目标 collection 列表（优先级从高到低）
-    QUERY_COLLECTIONS = ["medical_device_kb_v2"]
+    QUERY_COLLECTIONS = ["insulin_pump_kb"]
+
+    # 额外的 ChromaDB 目录及其 collection 列表
+    # 格式: {db_path: [collection_names]}
+    EXTRA_DB_CONFIG = {}
 
     def __init__(
         self,
@@ -60,6 +64,33 @@ class VectorStore:
                 settings=Settings(anonymized_telemetry=False)
             )
         return _chroma_client
+
+    # 额外客户端缓存: {path: client}
+    _extra_clients = {}
+
+    @classmethod
+    def _get_client_for_path(cls, db_path: str):
+        """获取或创建指定路径的 ChromaDB 客户端"""
+        db_path = os.path.abspath(db_path)
+        if db_path not in cls._extra_clients:
+            os.makedirs(db_path, exist_ok=True)
+            cls._extra_clients[db_path] = chromadb.PersistentClient(
+                path=db_path,
+                settings=Settings(anonymized_telemetry=False)
+            )
+        return cls._extra_clients[db_path]
+
+    @classmethod
+    def set_extra_db_config(cls, config: dict):
+        """
+        设置额外的 ChromaDB 目录配置
+
+        Args:
+            config: {db_path: [collection_names]}
+        """
+        cls.EXTRA_DB_CONFIG = config
+        # 清除旧的额外客户端缓存
+        cls._extra_clients = {}
 
     @property
     def embedder(self):
@@ -173,9 +204,16 @@ class VectorStore:
         query_embedding = self.embedder.encode_single(query)
         all_results = []
 
-        for coll_name in self.QUERY_COLLECTIONS:
+        # 构建所有 (client, collection_name) 查询对
+        query_targets = [(self.client, name) for name in self.QUERY_COLLECTIONS]
+        for db_path, coll_names in self.EXTRA_DB_CONFIG.items():
+            client = self._get_client_for_path(db_path)
+            for name in coll_names:
+                query_targets.append((client, name))
+
+        for client, coll_name in query_targets:
             try:
-                coll = self.client.get_collection(name=coll_name)
+                coll = client.get_collection(name=coll_name)
                 results = coll.query(
                     query_embeddings=[query_embedding],
                     n_results=top_k,
@@ -234,9 +272,16 @@ class VectorStore:
         """
         query_embedding = self.embedder.encode_single(query)
 
-        # 1. 向量检索 - 从多个 collection 检索并合并
+        # 构建所有 (client, collection_name) 查询对
+        query_targets = [(self.client, name) for name in self.QUERY_COLLECTIONS]
+        for db_path, coll_names in self.EXTRA_DB_CONFIG.items():
+            client = self._get_client_for_path(db_path)
+            for name in coll_names:
+                query_targets.append((client, name))
+
+        # 1. 向量检索 - 从所有 collection 检索并合并
         vector_dict = {}
-        for coll_name in self.QUERY_COLLECTIONS:
+        for client, coll_name in query_targets:
             try:
                 coll = self.client.get_collection(name=coll_name)
                 vector_results = coll.query(
@@ -277,9 +322,9 @@ class VectorStore:
         # 如果 doc_type 过滤后无结果，忽略过滤重新检索
         if not vector_dict and doc_type:
             print(f"    [RAG] doc_type='{doc_type}' 过滤无结果，忽略类型过滤")
-            for coll_name in self.QUERY_COLLECTIONS:
+            for client, coll_name in query_targets:
                 try:
-                    coll = self.client.get_collection(name=coll_name)
+                    coll = client.get_collection(name=coll_name)
                     vector_results = coll.query(
                         query_embeddings=[query_embedding],
                         n_results=top_k * 2,
@@ -309,12 +354,12 @@ class VectorStore:
 
         # 2. BM25 关键词检索 - 仅对小 collection 执行（<5万条）
         bm25_scores = {}
-        for coll_name in self.QUERY_COLLECTIONS:
+        for client, coll_name in query_targets:
             try:
-                coll = self.client.get_collection(name=coll_name)
+                coll = client.get_collection(name=coll_name)
                 coll_count = coll.count()
                 if coll_count < 50000:
-                    scores = self._bm25_search_collection(coll_name, query, None, top_k * 2)
+                    scores = self._bm25_search_collection(client, coll_name, query, None, top_k * 2)
                     for cid, score in scores.items():
                         if cid not in bm25_scores or score > bm25_scores[cid]:
                             bm25_scores[cid] = score
@@ -371,10 +416,11 @@ class VectorStore:
             {chunk_id: bm25_score, ...}
         """
         full_name = f"{self.COLLECTION_NAME_PREFIX}{self.collection_name}"
-        return self._bm25_search_collection(full_name, query, doc_type, top_k)
+        return self._bm25_search_collection(self.client, full_name, query, doc_type, top_k)
 
     def _bm25_search_collection(
         self,
+        client,
         collection_name: str,
         query: str,
         doc_type: Optional[str] = None,
@@ -382,6 +428,13 @@ class VectorStore:
     ) -> dict:
         """
         BM25 关键词检索 - 从指定 collection 检索
+
+        Args:
+            client: ChromaDB 客户端
+            collection_name: collection 名称
+            query: 查询文本
+            doc_type: 文档类型过滤
+            top_k: 返回数量
 
         Returns:
             {chunk_id: bm25_score, ...}
@@ -392,7 +445,7 @@ class VectorStore:
             return {}
 
         try:
-            coll = self.client.get_collection(name=collection_name)
+            coll = client.get_collection(name=collection_name)
             result = coll.get(include=["documents", "metadatas"])
             if not result["ids"]:
                 return {}
@@ -438,6 +491,17 @@ class VectorStore:
             try:
                 coll = self.client.get_collection(name=coll_name)
                 total += coll.count()
+            except Exception:
+                continue
+        for db_path, coll_names in self.EXTRA_DB_CONFIG.items():
+            try:
+                client = self._get_client_for_path(db_path)
+                for coll_name in coll_names:
+                    try:
+                        coll = client.get_collection(name=coll_name)
+                        total += coll.count()
+                    except Exception:
+                        continue
             except Exception:
                 continue
         # 如果目标 collection 无数据，回退到默认 collection
