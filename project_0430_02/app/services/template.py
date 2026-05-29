@@ -116,6 +116,7 @@ class TemplateService:
         current_heading = None
         in_code_block = False
         code_content = []
+        table_buffer = []  # 收集连续的Markdown表格行
 
         for line in lines:
             stripped = line.strip()
@@ -126,6 +127,7 @@ class TemplateService:
 
             # 代码块处理
             if stripped.startswith("```"):
+                self._flush_table(doc, table_buffer)
                 if in_code_block:
                     # 结束代码块
                     p = doc.add_paragraph()
@@ -138,6 +140,14 @@ class TemplateService:
             if in_code_block:
                 code_content.append(stripped)
                 continue
+
+            # 表格行处理 - 收集连续表格行到buffer
+            if stripped.startswith("| ") or (stripped.startswith("|") and "|" in stripped[1:]):
+                table_buffer.append(stripped)
+                continue
+
+            # 非表格行，先flush缓冲的表格
+            self._flush_table(doc, table_buffer)
 
             # 标题处理
             if stripped.startswith("## "):
@@ -154,9 +164,6 @@ class TemplateService:
             elif stripped.startswith("- ") or stripped.startswith("* "):
                 # 列表项
                 p = doc.add_paragraph(stripped[2:], style="List Bullet")
-            elif stripped.startswith("| "):
-                # 表格行 - 简化处理
-                continue
             elif stripped == "---":
                 # 分隔线
                 p = doc.add_paragraph()
@@ -164,6 +171,58 @@ class TemplateService:
             elif stripped:
                 # 普通段落 - 确保是字符串
                 doc.add_paragraph(str(stripped))
+
+        # 处理末尾可能残留的表格
+        self._flush_table(doc, table_buffer)
+
+    def _flush_table(self, doc: Document, table_buffer: list):
+        """将缓冲的Markdown表格行转换为Word表格"""
+        if not table_buffer:
+            return
+
+        rows = []
+        has_header = False
+
+        for row_text in table_buffer:
+            cells = [c.strip() for c in row_text.strip("|").split("|")]
+            # 检测分隔行 (如 |---|---|)
+            is_separator = all(
+                c.replace("-", "").replace(":", "").replace(" ", "") == ""
+                for c in cells
+            )
+            if is_separator:
+                has_header = True
+                continue
+            rows.append(cells)
+
+        if not rows:
+            table_buffer.clear()
+            return
+
+        # 确定列数（取最宽的行）
+        num_cols = max(len(row) for row in rows)
+
+        # 填充不足的列
+        for row in rows:
+            while len(row) < num_cols:
+                row.append("")
+
+        # 创建Word表格
+        table = doc.add_table(rows=len(rows), cols=num_cols, style="Table Grid")
+
+        for i, row in enumerate(rows):
+            for j in range(num_cols):
+                cell = table.cell(i, j)
+                cell.text = row[j]
+                # 表头加粗
+                if has_header and i == 0:
+                    for paragraph in cell.paragraphs:
+                        for run in paragraph.runs:
+                            run.bold = True
+
+        # 表格后加空行
+        doc.add_paragraph()
+        table_buffer.clear()
 
     def save_document(self, doc: Document, file_path: str):
         """保存文档到文件"""
