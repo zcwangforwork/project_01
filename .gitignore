@@ -1,0 +1,18 @@
+# Chroma database files (large binary files)
+*.sqlite3
+*_data/
+chroma_db*/
+chroma_data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
