@@ -12,3 +12,4 @@ rank_bm25>=0.2.2
 playwright>=1.40.0
 python-dotenv>=1.0.0
 volcenginesdkarkruntime>=1.0.0
+claude-agent-sdk

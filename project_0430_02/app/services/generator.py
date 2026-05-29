@@ -98,6 +98,11 @@ class DocumentGenerator:
 
         return "\n\n".join(parts) if parts else ""
 
+    @property
+    def search_log(self) -> list:
+        """返回最近一次生成的搜索方式日志"""
+        return getattr(self.minimax_service, "search_log", [])
+
     def _validate_input(
         self,
         doc_type: str,

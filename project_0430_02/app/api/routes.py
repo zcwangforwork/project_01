@@ -70,6 +70,7 @@ def _run_generation(task_id: str, doc_type: str, product_name: str, product_type
         tasks[task_id]["message"] = "文档生成完成！"
         tasks[task_id]["file_bytes"] = file_bytes
         tasks[task_id]["filename"] = filename
+        tasks[task_id]["search_log"] = generator.search_log
 
     except Exception as e:
         tasks[task_id]["status"] = "failed"
@@ -122,7 +123,8 @@ async def get_task_status(task_id: str):
         "status": task["status"],
         "progress": task["progress"],
         "message": task["message"],
-        "filename": task.get("filename", "")
+        "filename": task.get("filename", ""),
+        "search_log": task.get("search_log", [])
     }
 
 

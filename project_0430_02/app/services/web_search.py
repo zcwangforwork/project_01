@@ -449,6 +449,10 @@ class EnhancedWebSearchService:
 
     async def _scrape_page_content(self, context, url: str) -> str:
         """深度抓取单个网页内容"""
+        # 跳过搜索引擎中转/追踪链接（如 Bing /ck/a 重定向），这类页面无实质内容
+        if any(pat in url for pat in ["bing.com/ck/a", "google.com/url?", "r.duckduckgo.com"]):
+            return ""
+
         page = await context.new_page()
         content = ""
 
@@ -612,28 +616,18 @@ class SyncWebSearchService:
         enable_file_download: bool = True,
         doc_type: str = "sop"
     ) -> Tuple[str, List[str]]:
-        """同步搜索（内部使用线程池）"""
+        """同步搜索（内部使用独立线程避免事件循环冲突）"""
+        import concurrent.futures
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # 在已有事件循环中创建新任务
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(
-                        asyncio.run,
-                        self.async_service.search_regulations(
-                            chapter_name, product_type, product_params, max_results,
-                            enable_deep_scrape, enable_file_download, doc_type
-                        )
-                    )
-                    return future.result(timeout=60)
-            else:
-                return asyncio.run(
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(
+                    asyncio.run,
                     self.async_service.search_regulations(
                         chapter_name, product_type, product_params, max_results,
                         enable_deep_scrape, enable_file_download, doc_type
                     )
                 )
+                return future.result(timeout=60)
         except Exception as e:
             print(f"    [WEB SEARCH] 同步调用失败: {e}")
             return "", []

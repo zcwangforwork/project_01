@@ -21,8 +21,31 @@ _rag_prompt_builder = None
 _web_search_available = None
 _web_search_service = None
 
+# Agent 搜索组件 — Claude Agent SDK（延迟初始化）
+_agent_search_available = None
+_agent_search_service = None
+
 # 跨 collection 检索 — uploads collection 是否可用
 _uploads_collection_available = None
+
+
+def _try_init_agent_search():
+    """延迟初始化 Agent SDK 搜索组件"""
+    global _agent_search_available, _agent_search_service
+    if _agent_search_available is not None:
+        return _agent_search_available
+    try:
+        from app.services.agent_search import SyncAgentSearchService
+        _agent_search_service = SyncAgentSearchService()
+        _agent_search_available = _agent_search_service.available
+        if _agent_search_available:
+            print("    [INIT] Agent SDK 搜索已就绪")
+        else:
+            print("    [INIT] Agent SDK 搜索不可用 (缺少 ANTHROPIC_API_KEY 或 SDK)")
+        return _agent_search_available
+    except ImportError:
+        _agent_search_available = False
+        return False
 
 
 def _try_init_web_search():
@@ -190,7 +213,9 @@ class MiniMaxService:
         self.api_key = api_key or _get_api_key()
         self.api_url = MINIMAX_API_URL
         self.use_rag = use_rag and _try_init_rag()
-        self.use_web_search = _try_init_web_search()  # Web 搜索默认可用
+        self.use_agent_search = _try_init_agent_search()  # Agent SDK 搜索优先
+        self.use_web_search = _try_init_web_search()      # Playwright 作为回退
+        self.search_log = []  # 记录每个章节使用的搜索方式
 
     def generate_content(
         self,
@@ -574,6 +599,7 @@ class MiniMaxService:
         full_document.append("---\n\n")
 
         print(f"开始分章节生成文档（共 {len(chapters)} 章）...")
+        self.search_log = []  # 重置搜索日志
 
         for i, chapter in enumerate(chapters, 1):
             chapter_name = chapter["name"]
@@ -620,10 +646,27 @@ class MiniMaxService:
             except Exception as e:
                 pass  # uploads collection 不可用时静默跳过
 
-            # 2. 尝试Web搜索补充（如可用）- 增强版
+            # 2. 尝试Web搜索补充（如可用）
+            # 优先使用 Agent SDK 智能搜索，失败/不可用时回退到 Playwright
             web_info = ""
             downloaded_files = []
-            if self.use_web_search and _web_search_service:
+            search_method = "none"  # 记录当前章节使用的搜索方式
+            if self.use_agent_search and _agent_search_service:
+                try:
+                    web_info, _ = _agent_search_service.search_regulations(
+                        chapter_name=chapter_name,
+                        product_type=product_type,
+                        product_params=product_params,
+                        doc_type=doc_type
+                    )
+                    if web_info:
+                        print(f"    Agent搜索: 获取到 {len(web_info)} 字符相关信息")
+                        search_method = "agent"
+                except Exception as e:
+                    print(f"    [WARNING] Agent搜索失败: {e}")
+
+            # Agent 搜索无结果时，回退到 Playwright
+            if not web_info and self.use_web_search and _web_search_service:
                 try:
                     web_info, downloaded_files = _web_search_service.search_regulations(
                         chapter_name=chapter_name,
@@ -635,13 +678,19 @@ class MiniMaxService:
                         doc_type=doc_type
                     )
                     if web_info:
-                        print(f"    Web搜索: 获取到 {len(web_info)} 字符相关信息")
+                        print(f"    Web搜索(Playwright): 获取到 {len(web_info)} 字符相关信息")
+                        search_method = "playwright"
                     if downloaded_files:
                         print(f"    下载文件: {len(downloaded_files)} 个")
                         # 将下载的文件添加到知识库
                         self._add_files_to_knowledge_base(downloaded_files, doc_type)
                 except Exception as e:
                     print(f"    [WARNING] Web搜索失败: {e}")
+
+            self.search_log.append({
+                "chapter": chapter_name,
+                "method": search_method
+            })
 
             # 3. 构建本章Prompt
             template = self._get_prompt_template(doc_type)

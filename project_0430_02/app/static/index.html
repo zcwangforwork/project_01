@@ -398,6 +398,53 @@
         .file-item.status-failed {
             border-left: 3px solid #e74c3c;
         }
+
+        /* ========== 搜索方式日志样式 ========== */
+        .search-log {
+            margin-top: 12px;
+            padding: 12px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            font-size: 13px;
+        }
+        .search-log-title {
+            font-weight: 600;
+            color: #444;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+        .search-log-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .search-log-list li {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 0;
+            color: #555;
+        }
+        .search-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .search-badge.agent {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+        .search-badge.playwright {
+            background: #fff3e0;
+            color: #e65100;
+        }
+        .search-badge.none {
+            background: #f5f5f5;
+            color: #999;
+        }
     </style>
 </head>
 <body>
@@ -916,11 +963,21 @@
                         clearInterval(pollTimer);
                         pollTimer = null;
 
-                        showStatus(
-                            '文档生成成功！' +
-                            '<button class="btn btn-download" onclick="downloadFile(\'' + taskId + '\')">下载文档</button>',
-                            'success'
-                        );
+                        let successHtml = '文档生成成功！' +
+                            '<button class="btn btn-download" onclick="downloadFile(\'' + taskId + '\')">下载文档</button>';
+
+                        // 渲染搜索方式日志
+                        if (data.search_log && data.search_log.length > 0) {
+                            const methodLabels = { agent: 'Agent SDK', playwright: 'Playwright', none: '无搜索' };
+                            const logItems = data.search_log.map(function(item) {
+                                return '<li>' + item.chapter + ': <span class="search-badge ' + item.method + '">' +
+                                    (methodLabels[item.method] || item.method) + '</span></li>';
+                            }).join('');
+                            successHtml += '<div class="search-log"><div class="search-log-title">搜索方式</div><ul class="search-log-list">' +
+                                logItems + '</ul></div>';
+                        }
+
+                        showStatus(successHtml, 'success');
                         document.getElementById('submitBtn').disabled = false;
 
                     } else if (data.status === 'failed') {
