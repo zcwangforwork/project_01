@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
 from app.services.generator import DocumentGenerator
-from app.services.doc_types import DOC_TYPE_LABELS, SUPPORTED_UPLOAD_FORMATS, MAX_UPLOAD_SIZE_BYTES
+from app.services.doc_types import DOC_TYPE_LABELS, DOC_CATEGORIES, SUPPORTED_UPLOAD_FORMATS, MAX_UPLOAD_SIZE_BYTES
 from app.services.attachment_service import (
     validate_upload, submit_extract_task, get_extract_status
 )
@@ -155,29 +155,29 @@ async def download_document(task_id: str):
 
 @router.get("/doc-types")
 async def get_doc_types():
-    """获取支持的文档类型列表"""
+    """获取支持的文档类型列表 — 贴敷式胰岛素泵全生命周期94+种文档"""
+    types = []
+    for cat_key, cat_info in DOC_CATEGORIES.items():
+        for doc_type in cat_info["types"]:
+            label = DOC_TYPE_LABELS.get(doc_type, doc_type)
+            types.append({
+                "value": doc_type,
+                "label": label,
+                "category": cat_info["name"],
+                "category_key": cat_key,
+                "description": cat_info["description"]
+            })
     return {
-        "types": [
-            # 风险管理类
-            {"value": "risk_management_report", "label": "风险管理报告", "category": "风险管理", "description": "符合ISO 14971/GB 42062的综合风险管理报告"},
-            {"value": "risk_management_plan", "label": "风险管理计划", "category": "风险管理", "description": "定义风险管理活动计划和职责分配"},
-            {"value": "fmea_analysis", "label": "FMEA分析报告", "category": "风险管理", "description": "失效模式与效应分析"},
-            {"value": "risk_acceptance_criteria", "label": "风险可接受准则", "category": "风险管理", "description": "风险判定标准和RPN准则"},
-            {"value": "periodic_risk_evaluation", "label": "定期风险评价报告", "category": "风险管理", "description": "上市后定期风险评价"},
-            # 设计开发类
-            {"value": "design_development_plan", "label": "设计和开发计划", "category": "设计开发", "description": "定义设计开发阶段、活动、职责和时间安排"},
-            {"value": "design_input", "label": "设计输入", "category": "设计开发", "description": "产品设计输入要求，包括性能、法规、标准要求"},
-            {"value": "design_output", "label": "设计输出", "category": "设计开发", "description": "设计输出文件，包括图纸、规范、检验规程等"},
-            {"value": "design_review", "label": "设计评审", "category": "设计开发", "description": "设计评审记录，包括评审内容、参与人员、评审结论"},
-            {"value": "design_verification", "label": "设计验证", "category": "设计开发", "description": "设计验证报告，证明设计输出满足设计输入要求"},
-            {"value": "design_validation", "label": "设计确认", "category": "设计开发", "description": "设计确认报告，证明产品满足使用要求"},
-            {"value": "design_change", "label": "设计变更", "category": "设计开发", "description": "设计变更控制记录，包括变更评估、审批和验证"},
-            {"value": "design_history_file", "label": "设计历史文件", "category": "设计开发", "description": "DHF设计历史文件，汇总所有设计开发活动记录"},
-            # 注册申报类
-            {"value": "product_spec", "label": "产品技术要求", "category": "注册申报", "description": "医疗器械注册产品技术要求"},
-            # 通用类
-            {"value": "instruction", "label": "使用说明书", "category": "通用", "description": "医疗器械使用说明书IFU"},
-            {"value": "sop", "label": "作业指导书", "category": "通用", "description": "标准操作规程SOP"}
+        "types": types,
+        "categories": [
+            {
+                "key": cat_key,
+                "name": cat_info["name"],
+                "description": cat_info["description"],
+                "icon": cat_info["icon"],
+                "count": len(cat_info["types"])
+            }
+            for cat_key, cat_info in DOC_CATEGORIES.items()
         ]
     }
 

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>QMS 文档生成工具 - 医疗器械质量体系文档生成</title>
+    <title>贴敷式胰岛素泵数字员工 - 医疗器械全生命周期文档生成</title>
     <style>
         * {
             margin: 0;
@@ -449,8 +449,8 @@
 </head>
 <body>
     <div class="container">
-        <h1>QMS 文档生成工具</h1>
-        <p class="subtitle">医疗器械质量体系文档智能生成</p>
+        <h1>贴敷式胰岛素泵 · 数字员工</h1>
+        <p class="subtitle">医疗器械全生命周期文档智能生成 — 覆盖设计开发、风险管理、软件合规、注册申报、生产质量、体系建设</p>
 
         <!-- 附件上传区域 -->
         <div class="upload-section">
@@ -489,12 +489,12 @@
 
             <div class="form-group">
                 <label for="productName">产品名称 <span class="required">*</span></label>
-                <input type="text" id="productName" name="productName" placeholder="例如：胰岛素泵、有源手术器械" required>
+                <input type="text" id="productName" name="productName" placeholder="例如：贴敷式胰岛素泵" value="贴敷式胰岛素泵" required>
             </div>
 
             <div class="form-group">
                 <label for="productType">产品类型</label>
-                <input type="text" id="productType" name="productType" placeholder="例如：有源医疗器械、植入器械">
+                <input type="text" id="productType" name="productType" placeholder="例如：有源医疗器械" value="有源医疗器械（III类）">
             </div>
 
             <div class="form-group">
@@ -508,7 +508,7 @@
         <div class="status" id="status"></div>
 
         <div class="footer">
-            <p>基于 AI 技术自动生成符合法规的质量体系文档</p>
+            <p>贴敷式胰岛素泵数字员工 — AI驱动全生命周期文档自动生成 | 覆盖94+种专业文档类型</p>
         </div>
     </div>
 
@@ -661,75 +661,48 @@
             return div.innerHTML;
         }
 
-        // ========== 文档类型描述 ==========
-        const docTypeDescriptions = {
-            'risk_management_report': '符合ISO 14971/GB 42062的综合风险管理报告，包含概述、风险分析、评估、控制措施、剩余风险评价等完整章节',
-            'risk_management_plan': '定义风险管理活动的人员职责、活动安排、评审计划和风险可接受准则',
-            'fmea_analysis': '失效模式与效应分析报告，包含严重度、频度数、探测度评价和RPN计算',
-            'risk_acceptance_criteria': '风险可接受准则文档，定义S/O/D等级划分和RPN阈值标准',
-            'periodic_risk_evaluation': '医疗器械上市后定期风险评价报告，符合法规要求',
-            'design_development_plan': '定义设计开发阶段、活动、职责和时间安排，符合ISO 13485要求',
-            'design_input': '产品设计输入要求，包括性能、法规、标准要求，作为设计开发的依据',
-            'design_output': '设计输出文件，包括图纸、规范、检验规程、包装规范等',
-            'design_review': '设计评审记录，包括评审内容、参与人员、评审结论、整改措施',
-            'design_verification': '设计验证报告，证明设计输出满足设计输入要求，包括测试数据',
-            'design_validation': '设计确认报告，证明产品满足使用要求和预期用途',
-            'design_change': '设计变更控制记录，包括变更评估、审批和验证，确保变更受控',
-            'design_history_file': 'DHF设计历史文件，汇总所有设计开发活动记录，用于注册和核查',
-            'product_spec': '医疗器械注册产品技术要求，包含型号规格、性能指标、检验方法等',
-            'instruction': '医疗器械使用说明书(IFU)，指导用户正确安全使用产品',
-            'sop': '标准操作规程，规范生产和质量控制流程'
-        };
+        // ========== 文档类型 — 从API动态加载 ==========
+        const docTypeDescriptions = {};
+        let docTypeGroups = [];
+        const docTypeLabelToKey = {};
 
         let pollTimer = null;
 
-        // ========== 自定义组合框 ==========
-        const docTypeGroups = [
-            {
-                label: '风险管理类',
-                options: [
-                    { label: '风险管理报告', value: 'risk_management_report' },
-                    { label: '风险管理计划', value: 'risk_management_plan' },
-                    { label: 'FMEA分析报告', value: 'fmea_analysis' },
-                    { label: '风险可接受准则', value: 'risk_acceptance_criteria' },
-                    { label: '定期风险评价报告', value: 'periodic_risk_evaluation' }
-                ]
-            },
-            {
-                label: '设计开发类',
-                options: [
-                    { label: '设计和开发计划', value: 'design_development_plan' },
-                    { label: '设计输入', value: 'design_input' },
-                    { label: '设计输出', value: 'design_output' },
-                    { label: '设计评审', value: 'design_review' },
-                    { label: '设计验证', value: 'design_verification' },
-                    { label: '设计确认', value: 'design_validation' },
-                    { label: '设计变更', value: 'design_change' },
-                    { label: '设计历史文件(DHF)', value: 'design_history_file' }
-                ]
-            },
-            {
-                label: '注册申报类',
-                options: [
-                    { label: '产品技术要求', value: 'product_spec' }
-                ]
-            },
-            {
-                label: '通用类',
-                options: [
-                    { label: '使用说明书', value: 'instruction' },
-                    { label: '作业指导书', value: 'sop' }
-                ]
+        // 页面加载时从API获取文档类型列表
+        async function loadDocTypes() {
+            try {
+                const resp = await fetch('/api/doc-types');
+                const data = await resp.json();
+                // data.types: [{value, label, category, category_key, description}]
+                // data.categories: [{key, name, description, icon, count}]
+                const categoryMap = {};
+                data.categories.forEach(cat => {
+                    categoryMap[cat.key] = {
+                        label: cat.icon + ' ' + cat.name,
+                        options: []
+                    };
+                });
+                data.types.forEach(t => {
+                    if (categoryMap[t.category_key]) {
+                        categoryMap[t.category_key].options.push({
+                            label: t.label,
+                            value: t.value
+                        });
+                        docTypeDescriptions[t.value] = t.description;
+                        docTypeLabelToKey[t.label] = t.value;
+                    }
+                });
+                // 过滤空分类
+                docTypeGroups = Object.values(categoryMap).filter(g => g.options.length > 0);
+            } catch (e) {
+                console.error('加载文档类型失败:', e);
+                // 回退：使用空列表
+                docTypeGroups = [];
             }
-        ];
+        }
 
-        // 文档类型中文标签到英文key的映射
-        const docTypeLabelToKey = {};
-        docTypeGroups.forEach(group => {
-            group.options.forEach(opt => {
-                docTypeLabelToKey[opt.label] = opt.value;
-            });
-        });
+        // 初始化时加载
+        loadDocTypes();
 
         const comboBox = document.getElementById('docTypeCombo');
         const comboInput = document.getElementById('docType');

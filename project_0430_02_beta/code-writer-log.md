@@ -1,5 +1,10 @@
-## 2026-05-12 11:00:00 - RAG 知识库重建（使用向量化 API）
+## 2026-06-02 09:55:00 - 贴敷式胰岛素泵数字员工全生命周期文档系统改造
+- Working Dir: `E:\nrf_sample_codes\working_team_work\public\project\project_0430_02_beta`
+- Purpose: 将项目从 16 种文档类型的 QMS 生成工具改造为覆盖 94+ 种文档类型的贴敷式胰岛素泵全生命周期数字员工
+- Files: doc_types.py (16→104), prompt_engineer.py (16→106), minimax.py DOC_CHAPTERS (16→106), routes.py, index.html
+- Result: Success — 104 types, 106 chapters, 106 prompts, 10 categories, API 200 OK
 
+## 2026-05-12 11:00:00 - RAG 知识库重建（使用向量化 API）
 - Working Dir: `E:\nrf_sample_codes\code_writer\project_0430_02`
 - Purpose: 使用火山方舟向量化 API (doubao-embedding-vision-250615, 1024维) 重建 RAG 知识库，替换旧的本地模型 (384维)
 - Result: Success - 向量库从 0 重建到 650 chunks，172 个来源文件
