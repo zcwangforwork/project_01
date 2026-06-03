@@ -119,6 +119,72 @@ DOC_TYPES = [
     "internal_audit_reports",            # 内部审核报告
     "pms_report",                        # 上市后监管报告(PMS Report)
 
+    # ========== 一、设计策划阶段 扩充（DHF清单） ==========
+    "market_research_product_definition",  # 市场调研与产品定义报告
+    "project_feasibility_study",  # 项目可行性研究报告
+    "patent_analysis_report",  # 专利分析报告
+    "project_approval_review",  # 立项评审记录
+
+    # ========== 二、设计输入阶段 扩充（DHF清单） ==========
+    "user_needs_specification",  # 用户需求规格书
+    "preliminary_risk_analysis",  # 初步风险分析报告
+    "product_risk_analysis_matrix",  # 产品风险分析和管理总表
+    "cybersecurity_risk_analysis_matrix",  # 网络安全风险分析和管理总表
+    "software_config_management_plan",  # 软件配置管理计划
+    "structural_design_requirements",  # 结构设计需求规格书
+    "packaging_labeling_requirements",  # 包装及标识设计需求
+    "product_rtm",  # 产品需求追溯矩阵(RTM)
+    "software_rtm",  # 软件开发追溯表
+    "cybersecurity_traceability_matrix",  # 网络安全追溯表
+
+    # ========== 三、设计输出阶段 扩充（DHF清单） ==========
+    "hardware_design_plan",  # 硬件设计方案
+    "structural_design_plan",  # 结构设计方案
+    "software_coding_standard",  # 软件编码规范
+    "packaging_labeling_design_plan",  # 包装及标识设计方案
+    "primary_packaging_material_report",  # 初包装材料选择与确认报告
+    "performance_research_records",  # 性能研究相关记录
+    "inspection_method_validation",  # 检验方法学验证方案及报告
+    "material_specification_drawing",  # 物料规格书及图纸
+    "process_flow_diagram",  # 工艺流程图
+    "tooling_drawing_acceptance",  # 工装图纸及验收记录
+    "approved_supplier_list",  # 合格供应商清单
+    "design_output_checklist",  # 设计输出清单
+
+    # ========== 四、设计验证阶段 扩充（DHF清单） ==========
+    "performance_verification_plan",  # 性能验证方案
+    "performance_verification_report",  # 性能验证报告
+    "software_unit_test_plan",  # 软件单元测试方案
+    "software_integration_test_plan",  # 软件集成测试方案
+    "software_system_test_plan",  # 软件系统测试方案
+    "software_quality_test_plan",  # 软件质量测试方案
+    "software_quality_test_report",  # 软件质量测试报告
+    "cybersecurity_test_plan",  # 网络安全测试方案
+    "software_interface_security_test_plan",  # 软件接口网络安全测试方案
+    "software_interface_security_test_report",  # 软件接口网络安全测试报告
+    "packaging_verification_plan",  # 包装及标识验证方案
+    "packaging_verification_report",  # 包装及标识验证报告
+    "service_life_verification_plan",  # 使用期限验证方案
+    "service_life_verification_report",  # 使用期限验证报告
+    "shelf_life_verification_plan",  # 货架有效期验证方案
+    "shelf_life_verification_report",  # 货架有效期验证报告
+    "transport_verification_plan",  # 包装运输验证方案
+    "leachables_test_plan",  # 可沥滤物测试方案
+    "leachables_test_report",  # 可沥滤物测试报告
+    "biocompatibility_drug_compatibility_report",  # 生物相容性及药液相容性试验报告
+    "safety_emc_reliability_test_report",  # 安规EMC环境可靠性强制检测报告
+    "registration_type_test_report",  # 注册检验报告
+
+    # ========== 六、设计转化阶段 扩充（DHF清单） ==========
+    "process_validation_plan",  # 工艺验证计划
+    "sterilization_validation_protocol",  # 灭菌确认方案
+    "sterilization_validation_report",  # 灭菌确认报告
+
+    # ========== 五、设计确认阶段 扩充（DHF清单） ==========
+    "clinical_trial_plan",  # 临床试验方案
+    "clinical_trial_report",  # 临床试验报告
+    "usability_test_plan",  # 可用性测试方案
+    "usability_test_report",  # 可用性测试报告
     # ========== 保留原有兼容类型（映射到新类型） ==========
     "design_output",                     # 设计输出（通用）
     "design_review",                     # 设计评审
@@ -250,6 +316,72 @@ DOC_TYPE_LABELS = {
     "internal_audit_reports": "内部审核报告",
     "pms_report": "上市后监管报告(PMS Report)",
 
+    # 一、设计策划阶段 扩充（DHF清单）
+    "market_research_product_definition": "市场调研与产品定义报告",
+    "project_feasibility_study": "项目可行性研究报告",
+    "patent_analysis_report": "专利分析报告",
+    "project_approval_review": "立项评审记录",
+
+    # 二、设计输入阶段 扩充（DHF清单）
+    "user_needs_specification": "用户需求规格书",
+    "preliminary_risk_analysis": "初步风险分析报告",
+    "product_risk_analysis_matrix": "产品风险分析和管理总表",
+    "cybersecurity_risk_analysis_matrix": "网络安全风险分析和管理总表",
+    "software_config_management_plan": "软件配置管理计划",
+    "structural_design_requirements": "结构设计需求规格书",
+    "packaging_labeling_requirements": "包装及标识设计需求",
+    "product_rtm": "产品需求追溯矩阵(RTM)",
+    "software_rtm": "软件开发追溯表",
+    "cybersecurity_traceability_matrix": "网络安全追溯表",
+
+    # 三、设计输出阶段 扩充（DHF清单）
+    "hardware_design_plan": "硬件设计方案",
+    "structural_design_plan": "结构设计方案",
+    "software_coding_standard": "软件编码规范",
+    "packaging_labeling_design_plan": "包装及标识设计方案",
+    "primary_packaging_material_report": "初包装材料选择与确认报告",
+    "performance_research_records": "性能研究相关记录",
+    "inspection_method_validation": "检验方法学验证方案及报告",
+    "material_specification_drawing": "物料规格书及图纸",
+    "process_flow_diagram": "工艺流程图",
+    "tooling_drawing_acceptance": "工装图纸及验收记录",
+    "approved_supplier_list": "合格供应商清单",
+    "design_output_checklist": "设计输出清单",
+
+    # 四、设计验证阶段 扩充（DHF清单）
+    "performance_verification_plan": "性能验证方案",
+    "performance_verification_report": "性能验证报告",
+    "software_unit_test_plan": "软件单元测试方案",
+    "software_integration_test_plan": "软件集成测试方案",
+    "software_system_test_plan": "软件系统测试方案",
+    "software_quality_test_plan": "软件质量测试方案",
+    "software_quality_test_report": "软件质量测试报告",
+    "cybersecurity_test_plan": "网络安全测试方案",
+    "software_interface_security_test_plan": "软件接口网络安全测试方案",
+    "software_interface_security_test_report": "软件接口网络安全测试报告",
+    "packaging_verification_plan": "包装及标识验证方案",
+    "packaging_verification_report": "包装及标识验证报告",
+    "service_life_verification_plan": "使用期限验证方案",
+    "service_life_verification_report": "使用期限验证报告",
+    "shelf_life_verification_plan": "货架有效期验证方案",
+    "shelf_life_verification_report": "货架有效期验证报告",
+    "transport_verification_plan": "包装运输验证方案",
+    "leachables_test_plan": "可沥滤物测试方案",
+    "leachables_test_report": "可沥滤物测试报告",
+    "biocompatibility_drug_compatibility_report": "生物相容性及药液相容性试验报告",
+    "safety_emc_reliability_test_report": "安规EMC环境可靠性强制检测报告",
+    "registration_type_test_report": "注册检验报告",
+
+    # 六、设计转化阶段 扩充（DHF清单）
+    "process_validation_plan": "工艺验证计划",
+    "sterilization_validation_protocol": "灭菌确认方案",
+    "sterilization_validation_report": "灭菌确认报告",
+
+    # 五、设计确认阶段 扩充（DHF清单）
+    "clinical_trial_plan": "临床试验方案",
+    "clinical_trial_report": "临床试验报告",
+    "usability_test_plan": "可用性测试方案",
+    "usability_test_report": "可用性测试报告",
     # 保留原有兼容类型
     "design_output": "设计输出",
     "design_review": "设计评审",
@@ -276,7 +408,9 @@ DOC_CATEGORIES = {
             "design_development_plan", "product_requirements_spec", "risk_management_plan",
             "software_development_plan", "usability_engineering_plan", "biological_evaluation_plan",
             "sterilization_validation_plan", "packaging_validation_plan", "supplier_management_plan",
-            "regulatory_strategy_document"
+            "regulatory_strategy_document",
+            "market_research_product_definition", "project_feasibility_study",
+            "patent_analysis_report", "project_approval_review"
         ]
     },
     "design_input": {
@@ -285,7 +419,11 @@ DOC_CATEGORIES = {
         "icon": "📥",
         "types": [
             "design_input", "software_requirements_spec", "hardware_requirements_spec",
-            "ui_requirements_spec", "cybersecurity_requirements", "labeling_ifu_requirements"
+            "ui_requirements_spec", "cybersecurity_requirements", "labeling_ifu_requirements",
+            "user_needs_specification", "preliminary_risk_analysis", "product_risk_analysis_matrix",
+            "cybersecurity_risk_analysis_matrix", "software_config_management_plan",
+            "structural_design_requirements", "packaging_labeling_requirements",
+            "product_rtm", "software_rtm", "cybersecurity_traceability_matrix"
         ]
     },
     "design_output": {
@@ -296,12 +434,17 @@ DOC_CATEGORIES = {
             "product_drawings", "bill_of_materials", "product_specification",
             "software_architecture_doc", "software_detailed_design", "hardware_design_doc",
             "firmware_design_doc", "industrial_design_doc", "label_nameplate_artwork",
-            "packaging_design_artwork", "instruction_for_use", "manufacturing_process_draft"
+            "packaging_design_artwork", "instruction_for_use", "manufacturing_process_draft",
+            "hardware_design_plan", "structural_design_plan", "software_coding_standard",
+            "packaging_labeling_design_plan", "primary_packaging_material_report",
+            "performance_research_records", "inspection_method_validation",
+            "material_specification_drawing", "process_flow_diagram",
+            "tooling_drawing_acceptance", "approved_supplier_list", "design_output_checklist"
         ]
     },
     "design_verification": {
         "name": "四、设计验证",
-        "description": "设计验证阶段 — 电气安全、EMC、软件测试、输注精度、环境可靠性等17项验证",
+        "description": "设计验证阶段 — 电气安全、EMC、软件测试、输注精度、环境可靠性等39项验证",
         "icon": "🔬",
         "types": [
             "design_verification_master_plan", "electrical_safety_test_report",
@@ -311,7 +454,18 @@ DOC_CATEGORIES = {
             "ip_rating_test_report", "environmental_reliability_test",
             "package_transport_test_report", "seal_integrity_test_report",
             "material_characterization_report", "accelerated_aging_test_report",
-            "sensor_calibration_validation", "cybersecurity_test_report"
+            "sensor_calibration_validation", "cybersecurity_test_report",
+            "performance_verification_plan", "performance_verification_report",
+            "software_unit_test_plan", "software_integration_test_plan",
+            "software_system_test_plan", "software_quality_test_plan",
+            "software_quality_test_report", "cybersecurity_test_plan",
+            "software_interface_security_test_plan", "software_interface_security_test_report",
+            "packaging_verification_plan", "packaging_verification_report",
+            "service_life_verification_plan", "service_life_verification_report",
+            "shelf_life_verification_plan", "shelf_life_verification_report",
+            "transport_verification_plan", "leachables_test_plan",
+            "leachables_test_report", "biocompatibility_drug_compatibility_report",
+            "safety_emc_reliability_test_report", "registration_type_test_report"
         ]
     },
     "design_validation": {
@@ -324,7 +478,9 @@ DOC_CATEGORIES = {
             "cytotoxicity_test_report", "skin_irritation_sensitization",
             "blood_compatibility_test_report", "sal_validation_report",
             "sterilization_residue_test_report", "process_validation_iq_oq_pq",
-            "cleaning_validation_report"
+            "cleaning_validation_report",
+            "clinical_trial_plan", "clinical_trial_report",
+            "usability_test_plan", "usability_test_report"
         ]
     },
     "design_transfer": {
@@ -334,7 +490,9 @@ DOC_CATEGORIES = {
         "types": [
             "design_transfer_plan", "design_transfer_report", "device_master_record",
             "manufacturing_sop", "inspection_sop", "equipment_operation_procedures",
-            "work_environment_control_doc"
+            "work_environment_control_doc",
+            "process_validation_plan", "sterilization_validation_protocol",
+            "sterilization_validation_report"
         ]
     },
     "production": {
