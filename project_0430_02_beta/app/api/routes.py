@@ -12,6 +12,7 @@ from app.services.doc_types import DOC_TYPE_LABELS, DOC_CATEGORIES, SUPPORTED_UP
 from app.services.attachment_service import (
     validate_upload, submit_extract_task, get_extract_status
 )
+from app.services.conversation import conversation_manager
 import io
 import os
 import time
@@ -65,12 +66,23 @@ def _run_generation(task_id: str, doc_type: str, product_name: str, product_type
         label = DOC_TYPE_LABELS.get(doc_type, doc_type)
         filename = f"{product_name}_{label}.docx"
 
+        # 创建会话，保存生成的内容供后续修订
+        session_id = conversation_manager.create_session(
+            doc_type=doc_type,
+            product_name=product_name,
+            product_type=product_type,
+            product_params=product_params,
+            doc_content=generator.last_generated_content
+        )
+
         tasks[task_id]["status"] = "completed"
         tasks[task_id]["progress"] = 100
         tasks[task_id]["message"] = "文档生成完成！"
         tasks[task_id]["file_bytes"] = file_bytes
         tasks[task_id]["filename"] = filename
         tasks[task_id]["search_log"] = generator.search_log
+        tasks[task_id]["session_id"] = session_id
+        tasks[task_id]["doc_content"] = generator.last_generated_content
 
     except Exception as e:
         tasks[task_id]["status"] = "failed"
@@ -118,7 +130,7 @@ async def get_task_status(task_id: str):
         raise HTTPException(status_code=404, detail="任务不存在")
 
     task = tasks[task_id]
-    return {
+    result = {
         "task_id": task_id,
         "status": task["status"],
         "progress": task["progress"],
@@ -126,6 +138,10 @@ async def get_task_status(task_id: str):
         "filename": task.get("filename", ""),
         "search_log": task.get("search_log", [])
     }
+    # 生成完成时返回 session_id 供前端进入修订模式
+    if task["status"] == "completed" and task.get("session_id"):
+        result["session_id"] = task["session_id"]
+    return result
 
 
 @router.get("/download/{task_id}")
@@ -146,6 +162,148 @@ async def download_document(task_id: str):
 
     return StreamingResponse(
         io.BytesIO(task["file_bytes"]),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+        }
+    )
+
+
+# ==================== 数字员工交互式修订接口 ====================
+
+class ReviseRequest(BaseModel):
+    """文档修订请求"""
+    session_id: str = Field(..., description="会话ID（从首次生成返回）")
+    feedback: str = Field(..., description="用户修改意见")
+
+
+@router.post("/revise")
+async def revise_document(request: ReviseRequest):
+    """
+    基于用户反馈修订文档（数字员工交互模式）
+
+    提交修改意见，返回修订后的文档
+    """
+    session = conversation_manager.get_session(request.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在或已过期")
+
+    if not request.feedback.strip():
+        raise HTTPException(status_code=400, detail="反馈意见不能为空")
+
+    # 记录反馈并创建版本快照
+    version_label = conversation_manager.add_feedback(request.session_id, request.feedback)
+
+    # 在后台执行修订
+    task_id = str(uuid.uuid4())[:8]
+    tasks[task_id] = {
+        "status": "revising",
+        "progress": 0,
+        "message": "正在根据反馈修订文档...",
+        "file_bytes": None,
+        "filename": "",
+        "session_id": request.session_id,
+        "created_at": time.time()
+    }
+
+    thread = threading.Thread(
+        target=_run_revision,
+        args=(task_id, request.session_id, request.feedback),
+        daemon=True
+    )
+    thread.start()
+
+    return {"task_id": task_id, "status": "revising", "message": "修订任务已提交", "version": version_label}
+
+
+def _run_revision(task_id: str, session_id: str, feedback: str):
+    """在后台线程中执行文档修订"""
+    try:
+        tasks[task_id]["status"] = "revising"
+        tasks[task_id]["progress"] = 20
+        tasks[task_id]["message"] = "正在根据反馈修订文档..."
+
+        session = conversation_manager.get_session(session_id)
+        if not session:
+            tasks[task_id]["status"] = "failed"
+            tasks[task_id]["message"] = "会话不存在"
+            return
+
+        generator = DocumentGenerator()
+
+        import asyncio
+        loop = asyncio.new_event_loop()
+        try:
+            file_bytes = loop.run_until_complete(
+                generator.revise(
+                    current_content=session.current_content,
+                    feedback=feedback,
+                    doc_type=session.doc_type,
+                    product_name=session.product_name,
+                    product_type=session.product_type,
+                    product_params=session.product_params
+                )
+            )
+        finally:
+            loop.close()
+
+        # 更新会话中的文档内容
+        conversation_manager.update_content(session_id, generator.last_generated_content)
+
+        label = DOC_TYPE_LABELS.get(session.doc_type, session.doc_type)
+        filename = f"{session.product_name}_{label}_修订版.docx"
+
+        tasks[task_id]["status"] = "completed"
+        tasks[task_id]["progress"] = 100
+        tasks[task_id]["message"] = "文档修订完成！"
+        tasks[task_id]["file_bytes"] = file_bytes
+        tasks[task_id]["filename"] = filename
+
+    except Exception as e:
+        tasks[task_id]["status"] = "failed"
+        tasks[task_id]["progress"] = 0
+        tasks[task_id]["message"] = f"修订失败: {str(e)}"
+
+
+@router.get("/session/{session_id}")
+async def get_session(session_id: str):
+    """获取数字员工会话状态"""
+    session = conversation_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在或已过期")
+    return session.to_dict()
+
+
+@router.get("/session/{session_id}/download")
+async def download_session_document(session_id: str):
+    """
+    下载会话当前的文档版本
+
+    根据会话中的最新内容重新生成 Word 文件并返回
+    """
+    session = conversation_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在或已过期")
+
+    from app.services.template import TemplateService
+    template_service = TemplateService()
+
+    doc = template_service.load_template(session.doc_type)
+    doc = template_service.fill_template(
+        doc=doc,
+        content=session.current_content,
+        product_name=session.product_name,
+        doc_type=session.doc_type
+    )
+    file_bytes = template_service.document_to_bytes(doc)
+
+    label = DOC_TYPE_LABELS.get(session.doc_type, session.doc_type)
+    v = session.version_count
+    filename = f"{session.product_name}_{label}_v{v}.docx"
+    encoded_filename = quote(filename)
+
+    return StreamingResponse(
+        io.BytesIO(file_bytes),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"

@@ -30,8 +30,8 @@ def build_rag_prompt(
 
     # 按 source_file 分组，构建参考上下文
     # 限制每条检索结果长度，避免 RAG 上下文过长导致 LLM 超时
-    MAX_CHUNK_LENGTH = 1000
-    MAX_CONTEXT_LENGTH = 8000
+    MAX_CHUNK_LENGTH = 1500
+    MAX_CONTEXT_LENGTH = 15000
 
     context_blocks = []
     total_length = 0

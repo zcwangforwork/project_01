@@ -3,6 +3,7 @@ Template Service - Word模板加载和填充
 """
 
 import os
+import re
 from io import BytesIO
 from typing import Optional
 from docx import Document
@@ -88,6 +89,68 @@ class TemplateService:
         self._parse_and_fill(doc, content, product_name, doc_type)
         return doc
 
+    def _add_formatted_paragraph(self, doc: Document, text: str, style: Optional[str] = None):
+        """
+        解析内联 Markdown 并添加为 Word 段落，支持：
+        - **加粗** / __加粗__
+        - *斜体* / _斜体_
+        - `行内代码`
+        - ~~删除线~~
+        - 组合格式如 ***加粗斜体***
+        """
+        p = doc.add_paragraph(style=style) if style else doc.add_paragraph()
+        if not text:
+            return p
+
+        # 正则匹配各种内联格式（按优先级）
+        pattern = re.compile(
+            r'(\*\*\*|___)(.+?)\1'           # 加粗斜体
+            r'|(\*\*|__)(.+?)\3'              # 加粗
+            r'|(\*|_)(.+?)\5'                 # 斜体
+            r'|(`)(.+?)\7'                    # 行内代码
+            r'|(~~)(.+?)\9'                   # 删除线
+        )
+
+        last_end = 0
+        for match in pattern.finditer(text):
+            # 添加匹配前的纯文本
+            prefix = text[last_end:match.start()]
+            if prefix:
+                p.add_run(prefix)
+
+            bold_italic, bi_text = match.group(1), match.group(2)
+            bold, b_text = match.group(3), match.group(4)
+            italic, i_text = match.group(5), match.group(6)
+            code, c_text = match.group(7), match.group(8)
+            strike, s_text = match.group(9), match.group(10)
+
+            if bold_italic and bi_text:
+                run = p.add_run(bi_text)
+                run.bold = True
+                run.italic = True
+            elif bold and b_text:
+                run = p.add_run(b_text)
+                run.bold = True
+            elif italic and i_text:
+                run = p.add_run(i_text)
+                run.italic = True
+            elif code and c_text:
+                run = p.add_run(c_text)
+                run.font.name = 'Courier New'
+                run.font.size = Pt(9)
+            elif strike and s_text:
+                run = p.add_run(s_text)
+                run.font.strike = True
+
+            last_end = match.end()
+
+        # 添加剩余纯文本
+        remaining = text[last_end:]
+        if remaining:
+            p.add_run(remaining)
+
+        return p
+
     def _parse_and_fill(
         self,
         doc: Document,
@@ -116,7 +179,10 @@ class TemplateService:
         current_heading = None
         in_code_block = False
         code_content = []
-        table_buffer = []  # 收集连续的Markdown表格行
+        table_buffer = []
+
+        # 编译数字列表正则
+        num_list_re = re.compile(r'^(\d+)[.)]\s+(.*)')
 
         for line in lines:
             stripped = line.strip()
@@ -129,7 +195,6 @@ class TemplateService:
             if stripped.startswith("```"):
                 self._flush_table(doc, table_buffer)
                 if in_code_block:
-                    # 结束代码块
                     p = doc.add_paragraph()
                     p.style = "Quote"
                     p.add_run("\n".join(code_content))
@@ -141,7 +206,7 @@ class TemplateService:
                 code_content.append(stripped)
                 continue
 
-            # 表格行处理 - 收集连续表格行到buffer
+            # 表格行处理
             if stripped.startswith("| ") or (stripped.startswith("|") and "|" in stripped[1:]):
                 table_buffer.append(stripped)
                 continue
@@ -156,21 +221,23 @@ class TemplateService:
             elif stripped.startswith("### "):
                 sub_heading = stripped[4:].strip()
                 doc.add_heading(sub_heading, level=2)
-            elif stripped.startswith("**") and stripped.endswith("**"):
-                # 粗体文本作为重点段落
-                p = doc.add_paragraph()
-                run = p.add_run(stripped[2:-2])
-                run.bold = True
-            elif stripped.startswith("- ") or stripped.startswith("* "):
-                # 列表项
-                p = doc.add_paragraph(stripped[2:], style="List Bullet")
+            elif stripped.startswith("#### "):
+                sub_heading = stripped[5:].strip()
+                doc.add_heading(sub_heading, level=3)
             elif stripped == "---":
-                # 分隔线
                 p = doc.add_paragraph()
                 p.add_run("─" * 50)
+            elif stripped.startswith("- ") or stripped.startswith("* "):
+                # 无序列表 — 使用内联格式化
+                self._add_formatted_paragraph(doc, stripped[2:], style="List Bullet")
+            elif num_list_re.match(stripped):
+                # 数字列表
+                match = num_list_re.match(stripped)
+                list_text = match.group(2)
+                self._add_formatted_paragraph(doc, list_text, style="List Number")
             elif stripped:
-                # 普通段落 - 确保是字符串
-                doc.add_paragraph(str(stripped))
+                # 普通段落 — 使用内联格式化
+                self._add_formatted_paragraph(doc, stripped)
 
         # 处理末尾可能残留的表格
         self._flush_table(doc, table_buffer)

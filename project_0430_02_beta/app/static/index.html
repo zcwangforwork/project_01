@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>贴敷式胰岛素泵数字员工 - 医疗器械全生命周期文档生成</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -15,54 +16,74 @@
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
             padding: 20px;
         }
 
-        .container {
+        /* ========== 双栏布局 ========== */
+        .app-layout {
+            display: flex;
+            gap: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+            min-height: calc(100vh - 40px);
+        }
+
+        /* 左栏：表单/聊天 */
+        .left-panel {
+            flex: 0 0 420px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* 右栏：文档预览 */
+        .right-panel {
+            flex: 1;
+            display: none;
+        }
+        .right-panel.active {
+            display: block;
+        }
+
+        .card {
             background: white;
             border-radius: 16px;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            padding: 40px;
-            width: 100%;
-            max-width: 650px;
+            padding: 32px;
+            overflow: hidden;
         }
 
         h1 {
             color: #333;
             text-align: center;
-            margin-bottom: 10px;
-            font-size: 28px;
+            margin-bottom: 6px;
+            font-size: 24px;
         }
 
         .subtitle {
             text-align: center;
             color: #666;
-            margin-bottom: 30px;
-            font-size: 14px;
+            margin-bottom: 24px;
+            font-size: 13px;
         }
 
         .form-group {
-            margin-bottom: 20px;
+            margin-bottom: 18px;
         }
 
         label {
             display: block;
-            margin-bottom: 8px;
+            margin-bottom: 6px;
             color: #444;
             font-weight: 500;
             font-size: 14px;
         }
 
-        label .required {
-            color: #e74c3c;
-        }
+        label .required { color: #e74c3c; }
 
         select, input, textarea {
             width: 100%;
-            padding: 12px 16px;
+            padding: 10px 14px;
             border: 2px solid #e0e0e0;
             border-radius: 8px;
             font-size: 14px;
@@ -75,19 +96,16 @@
             border-color: #667eea;
         }
 
-        textarea {
-            min-height: 80px;
-            resize: vertical;
-        }
+        textarea { min-height: 72px; resize: vertical; }
 
         .btn {
             width: 100%;
-            padding: 14px 24px;
+            padding: 13px 24px;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border: none;
             border-radius: 8px;
-            font-size: 16px;
+            font-size: 15px;
             font-weight: 600;
             cursor: pointer;
             transition: transform 0.2s, box-shadow 0.2s;
@@ -107,15 +125,23 @@
 
         .btn-download {
             background: linear-gradient(135deg, #2e7d32 0%, #43a047 100%);
-            margin-top: 12px;
         }
-
         .btn-download:hover {
             box-shadow: 0 6px 20px rgba(46, 125, 50, 0.4);
         }
 
+        .btn-outline {
+            background: white;
+            color: #667eea;
+            border: 2px solid #667eea;
+        }
+        .btn-outline:hover {
+            background: #f0f0ff;
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.2);
+        }
+
         .status {
-            margin-top: 20px;
+            margin-top: 16px;
             padding: 12px;
             border-radius: 8px;
             text-align: center;
@@ -151,121 +177,6 @@
             margin-top: 4px;
         }
 
-        /* ========== 自定义组合框样式 ========== */
-        .combo-box {
-            position: relative;
-            width: 100%;
-        }
-        .combo-input {
-            width: 100%;
-            padding: 12px 36px 12px 16px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            font-size: 14px;
-            font-family: inherit;
-            transition: border-color 0.3s;
-            cursor: pointer;
-            background: white;
-        }
-        .combo-input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        .combo-arrow {
-            position: absolute;
-            right: 12px;
-            top: 50%;
-            transform: translateY(-50%);
-            pointer-events: none;
-            color: #999;
-            font-size: 12px;
-            transition: transform 0.2s;
-        }
-        .combo-box.open .combo-arrow {
-            transform: translateY(-50%) rotate(180deg);
-        }
-        .combo-dropdown {
-            position: absolute;
-            top: 100%;
-            left: 0;
-            right: 0;
-            margin-top: 4px;
-            background: white;
-            border: 1px solid #e0e0e0;
-            border-radius: 8px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
-            max-height: 320px;
-            overflow-y: auto;
-            z-index: 1000;
-            display: none;
-        }
-        .combo-box.open .combo-dropdown {
-            display: block;
-        }
-        .combo-group-label {
-            padding: 8px 14px 4px;
-            font-size: 12px;
-            font-weight: 600;
-            color: #667eea;
-            text-transform: none;
-            letter-spacing: 0;
-        }
-        .combo-option {
-            padding: 9px 14px;
-            font-size: 14px;
-            color: #333;
-            cursor: pointer;
-            transition: background 0.15s;
-        }
-        .combo-option:hover,
-        .combo-option.highlighted {
-            background: #f0f0ff;
-            color: #4f46e5;
-        }
-        .combo-option.empty {
-            color: #999;
-            cursor: default;
-            text-align: center;
-            padding: 16px 14px;
-        }
-        .combo-option.empty:hover {
-            background: transparent;
-            color: #999;
-        }
-        .combo-custom-hint {
-            padding: 8px 14px;
-            font-size: 12px;
-            color: #999;
-            border-top: 1px solid #f0f0f0;
-            text-align: center;
-        }
-
-        .footer {
-            text-align: center;
-            margin-top: 20px;
-            color: #999;
-            font-size: 12px;
-        }
-
-        .category-header {
-            font-size: 13px;
-            font-weight: 600;
-            color: #667eea;
-            padding: 8px 12px;
-            background: #f5f3ff;
-            border-radius: 6px;
-            margin-top: 8px;
-        }
-
-        .doc-list {
-            padding-left: 0;
-            list-style: none;
-        }
-
-        .doc-list li {
-            padding: 4px 0;
-        }
-
         .progress-bar-container {
             margin-top: 10px;
             background: #e0e0e0;
@@ -282,30 +193,87 @@
             width: 0%;
         }
 
-        /* ========== 附件上传样式 ========== */
-        .upload-section {
-            margin-bottom: 20px;
+        /* ========== 自定义组合框样式 ========== */
+        .combo-box { position: relative; width: 100%; }
+        .combo-input {
+            width: 100%;
+            padding: 10px 34px 10px 14px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            cursor: pointer;
+            background: white;
         }
-        .section-title {
-            font-size: 15px;
-            font-weight: 600;
-            color: #444;
-            margin-bottom: 4px;
-        }
-        .section-desc {
+        .combo-input:focus { outline: none; border-color: #667eea; }
+        .combo-arrow {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            pointer-events: none;
+            color: #999;
             font-size: 12px;
-            color: #888;
-            margin-bottom: 12px;
+            transition: transform 0.2s;
         }
-        .section-divider {
-            border: none;
-            border-top: 1px solid #e8e8e8;
-            margin: 20px 0;
+        .combo-box.open .combo-arrow { transform: translateY(-50%) rotate(180deg); }
+        .combo-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            margin-top: 4px;
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+            max-height: 280px;
+            overflow-y: auto;
+            z-index: 1000;
+            display: none;
         }
+        .combo-box.open .combo-dropdown { display: block; }
+        .combo-group-label {
+            padding: 8px 14px 4px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #667eea;
+        }
+        .combo-option {
+            padding: 8px 14px;
+            font-size: 14px;
+            color: #333;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .combo-option:hover, .combo-option.highlighted {
+            background: #f0f0ff;
+            color: #4f46e5;
+        }
+        .combo-option.empty {
+            color: #999;
+            cursor: default;
+            text-align: center;
+            padding: 16px 14px;
+        }
+        .combo-option.empty:hover { background: transparent; color: #999; }
+        .combo-custom-hint {
+            padding: 8px 14px;
+            font-size: 12px;
+            color: #999;
+            border-top: 1px solid #f0f0f0;
+            text-align: center;
+        }
+
+        /* ========== 附件上传样式 ========== */
+        .upload-section { margin-bottom: 18px; }
+        .section-title { font-size: 14px; font-weight: 600; color: #444; margin-bottom: 4px; }
+        .section-desc { font-size: 12px; color: #888; margin-bottom: 10px; }
+        .section-divider { border: none; border-top: 1px solid #e8e8e8; margin: 16px 0; }
         .upload-area {
             border: 2px dashed #ccc;
             border-radius: 10px;
-            padding: 24px;
+            padding: 20px;
             text-align: center;
             cursor: pointer;
             transition: border-color 0.3s, background 0.3s;
@@ -315,24 +283,10 @@
             border-color: #667eea;
             background: #f0f0ff;
         }
-        .upload-icon {
-            font-size: 32px;
-            color: #aaa;
-            font-weight: 300;
-            line-height: 1;
-        }
-        .upload-hint {
-            font-size: 13px;
-            color: #666;
-            margin: 8px 0 4px;
-        }
-        .upload-formats {
-            font-size: 11px;
-            color: #999;
-        }
-        .upload-options {
-            margin-top: 8px;
-        }
+        .upload-icon { font-size: 28px; color: #aaa; font-weight: 300; line-height: 1; }
+        .upload-hint { font-size: 13px; color: #666; margin: 6px 0 4px; }
+        .upload-formats { font-size: 11px; color: #999; }
+        .upload-options { margin-top: 8px; }
         .checkbox-label {
             font-size: 13px;
             color: #555;
@@ -341,23 +295,18 @@
             gap: 6px;
             cursor: pointer;
         }
-        .uploaded-files {
-            margin-top: 12px;
-        }
+        .uploaded-files { margin-top: 10px; }
         .file-item {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 8px 12px;
+            padding: 6px 10px;
             background: #f5f5f5;
             border-radius: 6px;
-            margin-bottom: 6px;
-            font-size: 13px;
+            margin-bottom: 4px;
+            font-size: 12px;
         }
-        .file-item .file-info {
-            flex: 1;
-            min-width: 0;
-        }
+        .file-item .file-info { flex: 1; min-width: 0; }
         .file-item .file-name {
             font-weight: 500;
             color: #333;
@@ -365,10 +314,7 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        .file-item .file-status {
-            font-size: 11px;
-            color: #888;
-        }
+        .file-item .file-status { font-size: 11px; color: #888; }
         .file-item .file-preview {
             font-size: 11px;
             color: #666;
@@ -376,7 +322,7 @@
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-            max-width: 400px;
+            max-width: 300px;
         }
         .file-item .file-actions button {
             background: none;
@@ -386,43 +332,26 @@
             font-size: 16px;
             padding: 2px 6px;
         }
-        .file-item .file-actions button:hover {
-            color: #e74c3c;
-        }
-        .file-item.status-processing {
-            border-left: 3px solid #f39c12;
-        }
-        .file-item.status-completed {
-            border-left: 3px solid #2ecc71;
-        }
-        .file-item.status-failed {
-            border-left: 3px solid #e74c3c;
-        }
+        .file-item .file-actions button:hover { color: #e74c3c; }
+        .file-item.status-processing { border-left: 3px solid #f39c12; }
+        .file-item.status-completed { border-left: 3px solid #2ecc71; }
+        .file-item.status-failed { border-left: 3px solid #e74c3c; }
 
-        /* ========== 搜索方式日志样式 ========== */
+        /* ========== 搜索方式日志 ========== */
         .search-log {
-            margin-top: 12px;
-            padding: 12px;
+            margin-top: 10px;
+            padding: 10px;
             background: #f8f9fa;
             border-radius: 8px;
-            font-size: 13px;
+            font-size: 12px;
         }
-        .search-log-title {
-            font-weight: 600;
-            color: #444;
-            margin-bottom: 8px;
-            font-size: 13px;
-        }
-        .search-log-list {
-            list-style: none;
-            padding: 0;
-            margin: 0;
-        }
+        .search-log-title { font-weight: 600; color: #444; margin-bottom: 6px; font-size: 13px; }
+        .search-log-list { list-style: none; padding: 0; margin: 0; }
         .search-log-list li {
             display: flex;
             align-items: center;
             gap: 8px;
-            padding: 4px 0;
+            padding: 3px 0;
             color: #555;
         }
         .search-badge {
@@ -433,98 +362,303 @@
             font-weight: 600;
             white-space: nowrap;
         }
-        .search-badge.agent {
-            background: #e8f5e9;
-            color: #2e7d32;
+        .search-badge.agent { background: #e8f5e9; color: #2e7d32; }
+        .search-badge.playwright { background: #fff3e0; color: #e65100; }
+        .search-badge.none { background: #f5f5f5; color: #999; }
+
+        /* ========== 数字员工对话面板 ========== */
+        .chat-card {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            max-height: calc(100vh - 40px);
         }
-        .search-badge.playwright {
-            background: #fff3e0;
-            color: #e65100;
+
+        .chat-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
         }
-        .search-badge.none {
-            background: #f5f5f5;
+        .chat-header h2 {
+            font-size: 18px;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .chat-header .version-badge {
+            background: #667eea;
+            color: white;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .chat-history {
+            flex: 1;
+            overflow-y: auto;
+            padding-right: 8px;
+            margin-bottom: 16px;
+            max-height: 260px;
+        }
+
+        .chat-msg {
+            margin-bottom: 14px;
+            animation: fadeIn 0.3s ease;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .chat-msg .msg-meta {
+            font-size: 11px;
             color: #999;
+            margin-bottom: 4px;
+        }
+        .chat-msg.user .msg-meta { text-align: right; }
+        .chat-msg.assistant .msg-meta { text-align: left; }
+
+        .chat-msg .msg-bubble {
+            padding: 12px 16px;
+            border-radius: 12px;
+            font-size: 14px;
+            line-height: 1.6;
+            max-width: 100%;
+        }
+        .chat-msg.user .msg-bubble {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .chat-msg.assistant .msg-bubble {
+            background: #f0f4ff;
+            color: #333;
+            border: 1px solid #dde4f5;
+        }
+
+        .chat-input-area {
+            border-top: 1px solid #eee;
+            padding-top: 14px;
+        }
+        .chat-input-area textarea {
+            min-height: 60px;
+            margin-bottom: 10px;
+        }
+        .chat-input-buttons {
+            display: flex;
+            gap: 10px;
+        }
+        .chat-input-buttons .btn { flex: 1; }
+
+        /* ========== 文档预览面板 ========== */
+        .preview-card {
+            height: calc(100vh - 40px);
+            display: flex;
+            flex-direction: column;
+            position: sticky;
+            top: 0;
+        }
+        .preview-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+            flex-shrink: 0;
+        }
+        .preview-header h2 {
+            font-size: 18px;
+            color: #333;
+        }
+        .preview-content {
+            flex: 1;
+            overflow-y: auto;
+            padding-right: 8px;
+            font-size: 14px;
+            line-height: 1.8;
+            color: #333;
+        }
+        .preview-content h1 { font-size: 22px; color: #333; text-align: left; margin: 16px 0 10px; }
+        .preview-content h2 { font-size: 18px; color: #444; margin: 20px 0 10px; border-bottom: 2px solid #667eea; padding-bottom: 4px; }
+        .preview-content h3 { font-size: 16px; color: #555; margin: 14px 0 8px; }
+        .preview-content p { margin: 8px 0; }
+        .preview-content table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 12px 0;
+            font-size: 13px;
+        }
+        .preview-content table th {
+            background: #667eea;
+            color: white;
+            padding: 8px 12px;
+            text-align: left;
+        }
+        .preview-content table td {
+            border: 1px solid #e0e0e0;
+            padding: 8px 12px;
+        }
+        .preview-content table tr:nth-child(even) { background: #f8f9fa; }
+        .preview-content ul, .preview-content ol { margin: 8px 0; padding-left: 24px; }
+        .preview-content li { margin: 4px 0; }
+        .preview-content blockquote {
+            border-left: 4px solid #667eea;
+            padding: 8px 16px;
+            margin: 12px 0;
+            background: #f0f4ff;
+            color: #555;
+        }
+        .preview-content code {
+            background: #f0f0f0;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        .preview-content hr { border: none; border-top: 1px solid #e0e0e0; margin: 16px 0; }
+
+        .footer {
+            text-align: center;
+            margin-top: 16px;
+            color: #999;
+            font-size: 12px;
+        }
+
+        /* ========== 响应式 ========== */
+        @media (max-width: 960px) {
+            .app-layout { flex-direction: column; }
+            .left-panel { flex: 0 0 auto; }
+            .right-panel { display: none; }
+            .right-panel.active { display: block; }
+            .preview-card { height: auto; max-height: 60vh; }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>贴敷式胰岛素泵 · 数字员工</h1>
-        <p class="subtitle">医疗器械全生命周期文档智能生成 — 覆盖设计开发、风险管理、软件合规、注册申报、生产质量、体系建设</p>
+    <div class="app-layout">
+        <!-- ==================== 左栏：表单 / 对话 ==================== -->
+        <div class="left-panel" id="leftPanel">
+            <!-- 初始生成表单卡片 -->
+            <div class="card" id="formCard">
+                <h1>贴敷式胰岛素泵 · 数字员工</h1>
+                <p class="subtitle">医疗器械全生命周期文档智能生成 — 覆盖设计开发、风险管理、软件合规、注册申报、生产质量、体系建设</p>
 
-        <!-- 附件上传区域 -->
-        <div class="upload-section">
-            <div class="section-title">附件上传（可选）</div>
-            <p class="section-desc">上传产品文档，系统将提取内容用于生成更精准的QMS文档</p>
+                <!-- 附件上传区域 -->
+                <div class="upload-section">
+                    <div class="section-title">附件上传（可选）</div>
+                    <p class="section-desc">上传产品文档，系统将提取内容用于生成更精准的QMS文档</p>
+                    <div class="upload-area" id="uploadArea">
+                        <div class="upload-icon">+</div>
+                        <p class="upload-hint">拖拽文件到此处，或点击选择</p>
+                        <p class="upload-formats">支持 .docx / .pdf / .txt，最大 10MB</p>
+                        <input type="file" id="fileInput" accept=".docx,.pdf,.txt" style="display:none" multiple>
+                    </div>
+                    <div class="upload-options">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="persistCheckbox" checked>
+                            <span>存入知识库（可在后续生成中复用）</span>
+                        </label>
+                    </div>
+                    <div class="uploaded-files" id="uploadedFiles"></div>
+                </div>
 
-            <div class="upload-area" id="uploadArea">
-                <div class="upload-icon">+</div>
-                <p class="upload-hint">拖拽文件到此处，或点击选择</p>
-                <p class="upload-formats">支持 .docx / .pdf / .txt，最大 10MB</p>
-                <input type="file" id="fileInput" accept=".docx,.pdf,.txt" style="display:none" multiple>
+                <hr class="section-divider">
+
+                <form id="docForm">
+                    <div class="form-group">
+                        <label for="docType">文档类型 <span class="required">*</span></label>
+                        <div class="combo-box" id="docTypeCombo">
+                            <input type="text" class="combo-input" id="docType" name="docType" placeholder="选择或输入文档类型" required autocomplete="off">
+                            <span class="combo-arrow">&#9662;</span>
+                            <div class="combo-dropdown" id="docTypeDropdown"></div>
+                        </div>
+                        <div class="doc-type-desc" id="docTypeDesc">请选择要生成的文档类型</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="productName">产品名称 <span class="required">*</span></label>
+                        <input type="text" id="productName" name="productName" placeholder="例如：贴敷式胰岛素泵" value="贴敷式胰岛素泵" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="productType">产品类型</label>
+                        <input type="text" id="productType" name="productType" placeholder="例如：有源医疗器械" value="有源医疗器械（III类）">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="productParams">产品参数/描述</label>
+                        <textarea id="productParams" name="productParams" placeholder="请描述产品的关键技术参数、结构组成、预期用途等特性..."></textarea>
+                    </div>
+
+                    <button type="submit" class="btn" id="submitBtn">开始生成</button>
+                </form>
+
+                <div class="status" id="status"></div>
             </div>
 
-            <div class="upload-options">
-                <label class="checkbox-label">
-                    <input type="checkbox" id="persistCheckbox" checked>
-                    <span>存入知识库（可在后续生成中复用）</span>
-                </label>
+            <!-- 对话修订卡片（生成完成后显示） -->
+            <div class="card chat-card" id="chatCard" style="display:none;">
+                <div class="chat-header">
+                    <h2>数字员工对话 <span class="version-badge" id="versionBadge">v0</span></h2>
+                    <button class="btn btn-outline" style="width:auto;padding:6px 14px;font-size:13px;" onclick="startNewDocument()">生成新文档</button>
+                </div>
+
+                <div class="chat-history" id="chatHistory">
+                    <div style="text-align:center;color:#999;font-size:13px;padding:20px;">
+                        文档已生成，请在下方输入您的修改意见
+                    </div>
+                </div>
+
+                <div class="chat-input-area">
+                    <textarea id="feedbackInput" placeholder="请输入修改意见，例如：请在第3章增加输注精度测试方法、风险管理部分需要补充软件失效分析..."></textarea>
+                    <div class="chat-input-buttons">
+                        <button class="btn" id="reviseBtn" onclick="submitFeedback()">发送修改意见</button>
+                        <button class="btn btn-download" id="downloadBtn" style="flex:0 0 auto;width:auto;padding:13px 20px;" onclick="downloadCurrentDoc()">下载当前版本</button>
+                    </div>
+                </div>
+
+                <div class="status" id="chatStatus"></div>
             </div>
 
-            <div class="uploaded-files" id="uploadedFiles"></div>
+            <div class="footer">
+                <p>贴敷式胰岛素泵数字员工 — AI驱动全生命周期文档自动生成 | 覆盖94+种专业文档类型</p>
+            </div>
         </div>
 
-        <hr class="section-divider">
-
-        <form id="docForm">
-            <div class="form-group">
-                <label for="docType">文档类型 <span class="required">*</span></label>
-                <div class="combo-box" id="docTypeCombo">
-                    <input type="text" class="combo-input" id="docType" name="docType" placeholder="选择或输入文档类型" required autocomplete="off">
-                    <span class="combo-arrow">&#9662;</span>
-                    <div class="combo-dropdown" id="docTypeDropdown"></div>
+        <!-- ==================== 右栏：文档预览 ==================== -->
+        <div class="right-panel" id="rightPanel">
+            <div class="card preview-card">
+                <div class="preview-header">
+                    <h2>文档预览</h2>
+                    <span style="font-size:12px;color:#999;" id="previewInfo"></span>
                 </div>
-                <div class="doc-type-desc" id="docTypeDesc">请选择要生成的文档类型</div>
+                <div class="preview-content" id="previewContent">
+                    <div style="text-align:center;color:#ccc;padding:60px 20px;">
+                        <div style="font-size:48px;margin-bottom:12px;">📄</div>
+                        <div>生成文档后，此处将显示文档预览</div>
+                    </div>
+                </div>
             </div>
-
-            <div class="form-group">
-                <label for="productName">产品名称 <span class="required">*</span></label>
-                <input type="text" id="productName" name="productName" placeholder="例如：贴敷式胰岛素泵" value="贴敷式胰岛素泵" required>
-            </div>
-
-            <div class="form-group">
-                <label for="productType">产品类型</label>
-                <input type="text" id="productType" name="productType" placeholder="例如：有源医疗器械" value="有源医疗器械（III类）">
-            </div>
-
-            <div class="form-group">
-                <label for="productParams">产品参数/描述</label>
-                <textarea id="productParams" name="productParams" placeholder="请描述产品的关键技术参数、结构组成、预期用途等特性..."></textarea>
-            </div>
-
-            <button type="submit" class="btn" id="submitBtn">开始生成</button>
-        </form>
-
-        <div class="status" id="status"></div>
-
-        <div class="footer">
-            <p>贴敷式胰岛素泵数字员工 — AI驱动全生命周期文档自动生成 | 覆盖94+种专业文档类型</p>
         </div>
     </div>
 
     <script>
+        // ========== 全局状态 ==========
+        let currentSessionId = null;
+        let currentTaskId = null;
+        let currentDocContent = '';
+        let currentFilename = '';
+
         // ========== 附件上传逻辑 ==========
-        const uploadedFileIds = [];  // 已成功上传的file_id列表
-        const uploadedContents = []; // 临时文本内容(非持久化)
+        const uploadedFileIds = [];
+        const uploadedContents = [];
 
         const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('fileInput');
         const uploadedFilesDiv = document.getElementById('uploadedFiles');
 
-        // 点击上传区域
         uploadArea.addEventListener('click', () => fileInput.click());
 
-        // 拖拽事件
         uploadArea.addEventListener('dragover', (e) => {
             e.preventDefault();
             uploadArea.classList.add('dragover');
@@ -551,19 +685,18 @@
 
         async function uploadFile(file) {
             const persist = document.getElementById('persistCheckbox').checked;
-            const fileId = 'temp_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+            const localId = 'temp_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
 
-            // 显示文件卡片
             const fileItem = document.createElement('div');
             fileItem.className = 'file-item status-processing';
-            fileItem.id = 'file-' + fileId;
+            fileItem.id = 'file-' + localId;
             fileItem.innerHTML = `
                 <div class="file-info">
                     <div class="file-name">${escapeHtml(file.name)}</div>
                     <div class="file-status"><span class="spinner"></span>正在上传提取...</div>
                 </div>
                 <div class="file-actions">
-                    <button onclick="removeFile('${fileId}')" title="移除">x</button>
+                    <button onclick="removeFile('${localId}')" title="移除">x</button>
                 </div>
             `;
             uploadedFilesDiv.appendChild(fileItem);
@@ -573,10 +706,7 @@
                 formData.append('file', file);
                 formData.append('persist', persist);
 
-                const response = await fetch('/api/upload', {
-                    method: 'POST',
-                    body: formData
-                });
+                const response = await fetch('/api/upload', { method: 'POST', body: formData });
 
                 if (!response.ok) {
                     const err = await response.json();
@@ -584,13 +714,10 @@
                 }
 
                 const result = await response.json();
-                const taskId = result.file_id;
-
-                // 轮询提取状态
-                pollExtractStatus(fileId, taskId);
+                pollExtractStatus(localId, result.file_id);
 
             } catch (error) {
-                updateFileItem(fileId, 'failed', null, error.message);
+                updateFileItem(localId, 'failed', null, error.message);
             }
         }
 
@@ -610,7 +737,6 @@
                         if (data.persisted) {
                             uploadedFileIds.push(taskId);
                         }
-                        // 非持久化的内容存入临时文本
                         if (!data.persisted && data.preview) {
                             uploadedContents.push(data.preview);
                         }
@@ -619,7 +745,6 @@
                         clearInterval(timer);
                         updateFileItem(localId, 'failed', null, data.message);
                     }
-                    // else: 继续轮询
                 } catch (error) {
                     clearInterval(timer);
                     updateFileItem(localId, 'failed', null, '查询状态失败');
@@ -650,9 +775,7 @@
 
         function removeFile(localId) {
             const item = document.getElementById('file-' + localId);
-            if (item) {
-                item.remove();
-            }
+            if (item) item.remove();
         }
 
         function escapeHtml(text) {
@@ -661,20 +784,17 @@
             return div.innerHTML;
         }
 
-        // ========== 文档类型 — 从API动态加载 ==========
+        // ========== 文档类型下拉 ==========
         const docTypeDescriptions = {};
         let docTypeGroups = [];
         const docTypeLabelToKey = {};
 
         let pollTimer = null;
 
-        // 页面加载时从API获取文档类型列表
         async function loadDocTypes() {
             try {
                 const resp = await fetch('/api/doc-types');
                 const data = await resp.json();
-                // data.types: [{value, label, category, category_key, description}]
-                // data.categories: [{key, name, description, icon, count}]
                 const categoryMap = {};
                 data.categories.forEach(cat => {
                     categoryMap[cat.key] = {
@@ -692,16 +812,13 @@
                         docTypeLabelToKey[t.label] = t.value;
                     }
                 });
-                // 过滤空分类
                 docTypeGroups = Object.values(categoryMap).filter(g => g.options.length > 0);
             } catch (e) {
                 console.error('加载文档类型失败:', e);
-                // 回退：使用空列表
                 docTypeGroups = [];
             }
         }
 
-        // 初始化时加载
         loadDocTypes();
 
         const comboBox = document.getElementById('docTypeCombo');
@@ -713,9 +830,7 @@
         function getAllOptions() {
             const all = [];
             docTypeGroups.forEach(group => {
-                group.options.forEach(opt => {
-                    all.push(opt);
-                });
+                group.options.forEach(opt => all.push(opt));
             });
             return all;
         }
@@ -781,9 +896,7 @@
 
         function resolveDocType(inputValue) {
             const trimmed = inputValue.trim();
-            if (docTypeLabelToKey[trimmed]) {
-                return docTypeLabelToKey[trimmed];
-            }
+            if (docTypeLabelToKey[trimmed]) return docTypeLabelToKey[trimmed];
             return trimmed;
         }
 
@@ -811,37 +924,27 @@
             highlightedIndex = -1;
         }
 
-        // Input events
-        comboInput.addEventListener('focus', function() {
-            openDropdown();
-        });
-
+        comboInput.addEventListener('focus', () => openDropdown());
         comboInput.addEventListener('input', function() {
             openDropdown();
             updateDocTypeDesc(resolveDocType(this.value));
         });
-
         comboInput.addEventListener('keydown', function(e) {
             const items = comboDropdown.querySelectorAll('.combo-option:not(.empty)');
 
             if (e.key === 'ArrowDown') {
                 e.preventDefault();
-                if (!comboBox.classList.contains('open')) {
-                    openDropdown();
-                }
+                if (!comboBox.classList.contains('open')) openDropdown();
                 setHighlight(Math.min(highlightedIndex + 1, items.length - 1));
             } else if (e.key === 'ArrowUp') {
                 e.preventDefault();
-                if (!comboBox.classList.contains('open')) {
-                    openDropdown();
-                }
+                if (!comboBox.classList.contains('open')) openDropdown();
                 setHighlight(Math.max(highlightedIndex - 1, -1));
             } else if (e.key === 'Enter') {
                 e.preventDefault();
                 if (comboBox.classList.contains('open') && highlightedIndex >= 0 && highlightedIndex < filteredOptions.length) {
                     selectOption(filteredOptions[highlightedIndex]);
                 } else {
-                    // Use custom input value
                     closeDropdown();
                     updateDocTypeDesc(resolveDocType(comboInput.value));
                 }
@@ -850,25 +953,18 @@
             }
         });
 
-        // Click outside to close
         document.addEventListener('click', function(e) {
-            if (!comboBox.contains(e.target)) {
-                closeDropdown();
-            }
+            if (!comboBox.contains(e.target)) closeDropdown();
         });
-
-        // Update description on input change (fallback)
         comboInput.addEventListener('change', function() {
             updateDocTypeDesc(resolveDocType(this.value));
         });
 
-        // ========== 表单提交 ==========
+        // ========== 初始生成：表单提交 ==========
         document.getElementById('docForm').addEventListener('submit', async function(e) {
             e.preventDefault();
 
             const submitBtn = document.getElementById('submitBtn');
-
-            // 收集附件数据
             const attachmentContent = uploadedContents.length > 0 ? uploadedContents.join('\n\n') : null;
             const fileIds = uploadedFileIds.length > 0 ? [...uploadedFileIds] : null;
 
@@ -891,7 +987,6 @@
             showStatus('<span class="spinner"></span>正在提交生成任务...', 'loading');
 
             try {
-                // 提交生成任务
                 const response = await fetch('/api/generate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -904,11 +999,9 @@
                 }
 
                 const result = await response.json();
-                const taskId = result.task_id;
-
-                // 开始轮询任务状态
+                currentTaskId = result.task_id;
                 showStatus('<span class="spinner"></span>正在生成文档，请稍候...<div class="progress-bar-container"><div class="progress-bar" id="progressBar"></div></div>', 'loading');
-                pollStatus(taskId);
+                pollGenerateStatus(currentTaskId);
 
             } catch (error) {
                 showStatus('提交失败: ' + error.message, 'error');
@@ -916,7 +1009,7 @@
             }
         });
 
-        function pollStatus(taskId) {
+        function pollGenerateStatus(taskId) {
             if (pollTimer) clearInterval(pollTimer);
 
             pollTimer = setInterval(async () => {
@@ -925,21 +1018,20 @@
                     if (!response.ok) throw new Error('查询状态失败');
 
                     const data = await response.json();
-
-                    // 更新进度条
                     const progressBar = document.getElementById('progressBar');
-                    if (progressBar) {
-                        progressBar.style.width = data.progress + '%';
-                    }
+                    if (progressBar) progressBar.style.width = data.progress + '%';
 
                     if (data.status === 'completed') {
                         clearInterval(pollTimer);
                         pollTimer = null;
 
-                        let successHtml = '文档生成成功！' +
-                            '<button class="btn btn-download" onclick="downloadFile(\'' + taskId + '\')">下载文档</button>';
+                        currentSessionId = data.session_id;
+                        currentFilename = data.filename;
 
-                        // 渲染搜索方式日志
+                        // 获取文档内容并切换到审阅模式
+                        await enterReviewMode(data.session_id);
+
+                        let successHtml = '文档生成成功！';
                         if (data.search_log && data.search_log.length > 0) {
                             const methodLabels = { agent: 'Agent SDK', playwright: 'Playwright', none: '无搜索' };
                             const logItems = data.search_log.map(function(item) {
@@ -949,9 +1041,7 @@
                             successHtml += '<div class="search-log"><div class="search-log-title">搜索方式</div><ul class="search-log-list">' +
                                 logItems + '</ul></div>';
                         }
-
                         showStatus(successHtml, 'success');
-                        document.getElementById('submitBtn').disabled = false;
 
                     } else if (data.status === 'failed') {
                         clearInterval(pollTimer);
@@ -960,20 +1050,212 @@
                         document.getElementById('submitBtn').disabled = false;
 
                     } else {
-                        // 更新状态消息
                         const progressBarHtml = '<div class="progress-bar-container"><div class="progress-bar" id="progressBar" style="width:' + data.progress + '%"></div></div>';
                         showStatus('<span class="spinner"></span>' + data.message + progressBarHtml, 'loading');
                     }
 
                 } catch (error) {
-                    // 轮询失败不立即终止，继续尝试
                     console.error('轮询状态失败:', error);
                 }
-            }, 2000); // 每2秒轮询一次
+            }, 2000);
         }
 
-        function downloadFile(taskId) {
-            window.location.href = `/api/download/${taskId}`;
+        // ========== 进入审阅修订模式 ==========
+        async function enterReviewMode(sessionId) {
+            try {
+                const response = await fetch('/api/session/' + sessionId);
+                if (!response.ok) throw new Error('获取会话信息失败');
+
+                const session = await response.json();
+                currentDocContent = session.current_content;
+
+                // 切换到审阅模式UI
+                document.getElementById('formCard').style.display = 'none';
+                document.getElementById('chatCard').style.display = 'flex';
+                document.getElementById('rightPanel').classList.add('active');
+
+                // 更新版本标签
+                updateVersionBadge(session.version_count);
+
+                // 渲染文档预览
+                renderPreview(session.current_content);
+
+                // 更新预览信息
+                document.getElementById('previewInfo').textContent =
+                    session.product_name + ' - ' + session.doc_type;
+
+                // 重置聊天区域
+                document.getElementById('chatHistory').innerHTML =
+                    '<div style="text-align:center;color:#999;font-size:13px;padding:20px;">文档已生成，请在下方输入您的修改意见</div>';
+
+                document.getElementById('feedbackInput').value = '';
+                document.getElementById('submitBtn').disabled = false;
+
+            } catch (error) {
+                console.error('进入审阅模式失败:', error);
+            }
+        }
+
+        function updateVersionBadge(versionCount) {
+            document.getElementById('versionBadge').textContent = 'v' + versionCount;
+            document.getElementById('downloadBtn').textContent = '下载 v' + versionCount;
+        }
+
+        // ========== 文档预览渲染 ==========
+        function renderPreview(markdown) {
+            const previewDiv = document.getElementById('previewContent');
+            if (typeof marked !== 'undefined') {
+                marked.setOptions({ breaks: true, gfm: true });
+                previewDiv.innerHTML = marked.parse(markdown);
+            } else {
+                // 降级：纯文本显示
+                previewDiv.innerHTML = '<pre style="white-space:pre-wrap;font-family:inherit;">' +
+                    escapeHtml(markdown) + '</pre>';
+            }
+            // 滚动到顶部
+            previewDiv.scrollTop = 0;
+        }
+
+        // ========== 提交反馈修订 ==========
+        async function submitFeedback() {
+            const feedbackInput = document.getElementById('feedbackInput');
+            const feedback = feedbackInput.value.trim();
+
+            if (!feedback) {
+                showChatStatus('请输入修改意见', 'error');
+                return;
+            }
+
+            if (!currentSessionId) {
+                showChatStatus('会话ID丢失，请重新生成文档', 'error');
+                return;
+            }
+
+            const reviseBtn = document.getElementById('reviseBtn');
+            reviseBtn.disabled = true;
+            showChatStatus('<span class="spinner"></span>数字员工正在根据您的意见修订文档...', 'loading');
+
+            // 添加用户消息到聊天历史
+            addChatMessage('user', feedback);
+
+            try {
+                const response = await fetch('/api/revise', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        feedback: feedback
+                    })
+                });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.detail || '修订失败');
+                }
+
+                const result = await response.json();
+                currentTaskId = result.task_id;
+
+                // 轮询修订状态
+                pollReviseStatus(result.task_id);
+
+            } catch (error) {
+                showChatStatus('修订失败: ' + error.message, 'error');
+                reviseBtn.disabled = false;
+            }
+        }
+
+        function pollReviseStatus(taskId) {
+            const timer = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/status/${taskId}`);
+                    if (!response.ok) throw new Error('查询状态失败');
+
+                    const data = await response.json();
+
+                    if (data.status === 'completed') {
+                        clearInterval(timer);
+
+                        // 重新获取会话信息
+                        const sessionResp = await fetch('/api/session/' + currentSessionId);
+                        const session = await sessionResp.json();
+                        currentDocContent = session.current_content;
+
+                        updateVersionBadge(session.version_count);
+                        renderPreview(session.current_content);
+
+                        // 添加系统回复到聊天
+                        addChatMessage('assistant', '文档已根据您的意见完成修订（' +
+                            '<span class="version-badge" style="font-size:11px;">v' +
+                            session.version_count + '</span>' +
+                            '），请在右侧预览面板查看最新版本。如需继续修改，请继续输入意见。');
+
+                        showChatStatus('修订完成！', 'success');
+                        document.getElementById('reviseBtn').disabled = false;
+                        document.getElementById('feedbackInput').value = '';
+
+                    } else if (data.status === 'failed') {
+                        clearInterval(timer);
+                        addChatMessage('assistant', '修订失败: ' + data.message);
+                        showChatStatus(data.message, 'error');
+                        document.getElementById('reviseBtn').disabled = false;
+
+                    }
+                } catch (error) {
+                    console.error('轮询修订状态失败:', error);
+                }
+            }, 1500);
+        }
+
+        // ========== 聊天界面 ==========
+        function addChatMessage(role, content) {
+            const history = document.getElementById('chatHistory');
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'chat-msg ' + role;
+
+            const now = new Date();
+            const timeStr = now.getHours().toString().padStart(2, '0') + ':' +
+                           now.getMinutes().toString().padStart(2, '0');
+
+            const roleLabel = role === 'user' ? '您' : '数字员工';
+
+            msgDiv.innerHTML = `
+                <div class="msg-meta">${roleLabel} · ${timeStr}</div>
+                <div class="msg-bubble">${content}</div>
+            `;
+
+            history.appendChild(msgDiv);
+            history.scrollTop = history.scrollHeight;
+        }
+
+        function showChatStatus(message, type) {
+            const status = document.getElementById('chatStatus');
+            status.className = 'status ' + type;
+            status.innerHTML = message;
+        }
+
+        // ========== 下载 ==========
+        function downloadCurrentDoc() {
+            if (currentSessionId) {
+                window.location.href = `/api/session/${currentSessionId}/download`;
+            } else if (currentTaskId) {
+                window.location.href = `/api/download/${currentTaskId}`;
+            }
+        }
+
+        function startNewDocument() {
+            // 重置状态
+            currentSessionId = null;
+            currentTaskId = null;
+            currentDocContent = '';
+            currentFilename = '';
+
+            document.getElementById('formCard').style.display = '';
+            document.getElementById('chatCard').style.display = 'none';
+            document.getElementById('rightPanel').classList.remove('active');
+            document.getElementById('submitBtn').disabled = false;
+            document.getElementById('status').className = 'status';
+            document.getElementById('status').innerHTML = '';
         }
 
         function showStatus(message, type) {

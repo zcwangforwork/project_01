@@ -16,6 +16,7 @@ class DocumentGenerator:
     def __init__(self):
         self.minimax_service = MiniMaxService()
         self.template_service = TemplateService()
+        self.last_generated_content = ""  # 最近一次生成的 Markdown 内容
 
     async def generate(
         self,
@@ -64,6 +65,9 @@ class DocumentGenerator:
             attachment_content=combined_attachment
         )
 
+        # 保存原始Markdown内容，供后续修订使用
+        self.last_generated_content = content
+
         # 4. 加载模板
         doc = self.template_service.load_template(doc_type)
 
@@ -102,6 +106,53 @@ class DocumentGenerator:
     def search_log(self) -> list:
         """返回最近一次生成的搜索方式日志"""
         return getattr(self.minimax_service, "search_log", [])
+
+    async def revise(
+        self,
+        current_content: str,
+        feedback: str,
+        doc_type: str,
+        product_name: str,
+        product_type: str,
+        product_params: str = ""
+    ) -> str:
+        """
+        基于用户反馈修订文档
+
+        Args:
+            current_content: 当前文档的 Markdown 内容
+            feedback: 用户修改意见
+            doc_type: 文档类型
+            product_name: 产品名称
+            product_type: 产品类型
+            product_params: 产品参数
+
+        Returns:
+            修订后的 Word 文件字节数据
+        """
+        # 调用 AI 修订内容
+        revised_content = await asyncio.to_thread(
+            self.minimax_service.revise_content,
+            current_content=current_content,
+            feedback=feedback,
+            doc_type=doc_type,
+            product_name=product_name,
+            product_type=product_type,
+            product_params=product_params
+        )
+
+        # 保存修订后的内容
+        self.last_generated_content = revised_content
+
+        # 生成 Word 文档
+        doc = self.template_service.load_template(doc_type)
+        doc = self.template_service.fill_template(
+            doc=doc,
+            content=revised_content,
+            product_name=product_name,
+            doc_type=doc_type
+        )
+        return self.template_service.document_to_bytes(doc)
 
     def _validate_input(
         self,

@@ -11,6 +11,7 @@ from urllib3.util.retry import Retry
 from typing import Optional, List, Dict
 
 from app.services.doc_types import DOC_TYPE_LABELS
+from app.services.prompt_engineer import DOC_TYPE_SPECIFIC_PROMPTS
 
 # RAG 组件 - 延迟导入避免启动时耗时
 _rag_available = False
@@ -1574,7 +1575,43 @@ class MiniMaxService:
 生成内容的详细程度要像车间实际使用的作业指导书一样，能够指导操作人员完成每一步工作。
 """,
         }
-        return templates.get(doc_type, templates["risk_management_report"])
+        # 为没有专属模板的文档类型提供通用模板，避免回退到风险管理报告
+        fallback = templates.get(doc_type)
+        if not fallback:
+            doc_label = DOC_TYPE_LABELS.get(doc_type, doc_type)
+            # 尝试从 prompt_engineer 获取该文档类型的专属提示词
+            specific_prompt = DOC_TYPE_SPECIFIC_PROMPTS.get(doc_type, "")
+            if specific_prompt:
+                specific_section = f"""
+【本文档类型专属要求】
+{specific_prompt}
+"""
+            else:
+                specific_section = ""
+
+            fallback = f"""
+你是一位资深的医疗器械文档编写专家，精通ISO 13485质量管理体系、医疗器械法规和贴敷式胰岛素泵产品特性。请根据以下产品信息和参考范文，生成{{chapter}}章节内容。
+
+【产品信息】
+- 产品名称：{{product_name}}
+- 产品类型：{{product_type}}
+- 产品参数：{{product_params}}
+{specific_section}
+【重要要求】
+请参考上方的【参考范文】和【相关法规标准】部分（如果提供），严格按照参考范文的详细程度和格式生成{{chapter}}的完整内容。
+
+特别注意：
+0. 【强制要求】所有内容必须使用中文，不要使用任何英文单词或短语，除了标准号（如GB 42062-2022、ISO 14971:2019等）中必须包含的部分
+1. 内容必须极其细致和具体，每个段落都要有实质性内容，不能只写框架标题
+2. 技术参数要具体、可测量、有明确的数值范围
+3. 表格要填写完整，不能留"（描述）"或"待填写"等占位符
+4. 使用专业、规范的医疗器械行业术语
+5. 每个章节都要有实质性内容，不能简略
+6. 格式上严格参照参考范文的标题层级、表格样式、段落组织
+
+你当前正在生成的是：{doc_label}。请确保生成内容与文档类型严格匹配。
+"""
+        return fallback
 
     def _generate_by_chapters(
         self,
@@ -1618,17 +1655,37 @@ class MiniMaxService:
 
             print(f"  [{i}/{len(chapters)}] 生成章节：{chapter_name}...")
 
-            # 1. 尝试RAG增强（如可用）— 检索 all collection
+            # 1a. 先检查 uploads collection，决定主知识库检索数量
+            uploads_chunks = []
+            uploads_has_data = False
+            try:
+                from app.services.rag.vector_store import VectorStore
+                uploads_vs = VectorStore(collection_name="uploads")
+                if uploads_vs.count() > 0:
+                    uploads_has_data = True
+                    uploads_chunks = uploads_vs.retrieve_hybrid(
+                        doc_type=doc_type,
+                        query=chapter_query,
+                        top_k=5,
+                        similarity_threshold=0.3,
+                        vector_weight=0.7
+                    )
+                    if uploads_chunks:
+                        print(f"    附件检索: 从uploads collection检索到 {len(uploads_chunks)} 条相关段落")
+            except Exception:
+                pass  # uploads collection 不可用时静默跳过
+
+            # 1b. 主知识库检索：uploads为空时retrieve 13条，否则retrieve 8条
+            main_k = 13 if not uploads_has_data else 8
             chunks = []
             if self.use_rag:
                 for attempt in range(2):  # 重试1次
                     try:
                         vector_store = _vector_store()
-                        # 使用混合检索 - 增加检索数量以获得更多参考
                         chunks = vector_store.retrieve_hybrid(
                             doc_type=doc_type,
                             query=chapter_query,
-                            top_k=8,
+                            top_k=main_k,
                             similarity_threshold=0.3,
                             vector_weight=0.7
                         )
@@ -1639,23 +1696,8 @@ class MiniMaxService:
                             continue
                         print(f"    [WARNING] RAG检索最终失败，回退到无RAG模式: {e}")
 
-            # 1b. 跨collection检索 — 检索 uploads collection（用户上传的附件）
-            uploads_chunks = []
-            try:
-                from app.services.rag.vector_store import VectorStore
-                uploads_vs = VectorStore(collection_name="uploads")
-                if uploads_vs.count() > 0:
-                    uploads_chunks = uploads_vs.retrieve_hybrid(
-                        doc_type=doc_type,
-                        query=chapter_query,
-                        top_k=5,
-                        similarity_threshold=0.3,
-                        vector_weight=0.7
-                    )
-                    if uploads_chunks:
-                        print(f"    附件检索: 从uploads collection检索到 {len(uploads_chunks)} 条相关段落")
-            except Exception as e:
-                pass  # uploads collection 不可用时静默跳过
+            # 合并检索结果
+            chunks.extend(uploads_chunks)
 
             # 2. 尝试Web搜索补充（如可用）
             # 优先使用 Agent SDK 智能搜索，失败/不可用时回退到 Playwright
@@ -1777,7 +1819,7 @@ class MiniMaxService:
     # 保留旧方法名作为别名，兼容现有调用
     generate_content_with_rag = _generate_by_chapters
 
-    def _call_api(self, prompt: str) -> str:
+    def _call_api(self, prompt: str, max_tokens: int = 12000) -> str:
         """内部方法：调用 MiniMax API（带重试机制）"""
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -1792,8 +1834,8 @@ class MiniMaxService:
                     "content": prompt
                 }
             ],
-            "temperature": 0.7,  # 稍微提高温度以获得更丰富的内容
-            "max_tokens": 12000  # 增加token限制以支持更详细的内容
+            "temperature": 0.7,
+            "max_tokens": max_tokens
         }
 
         # 创建 session 并配置重试策略
@@ -1846,6 +1888,252 @@ class MiniMaxService:
                 raise ValueError(f"解析API响应失败: {str(e)}")
             finally:
                 session.close()
+
+    def revise_content(
+        self,
+        current_content: str,
+        feedback: str,
+        doc_type: str,
+        product_name: str,
+        product_type: str,
+        product_params: str = ""
+    ) -> str:
+        """
+        基于用户反馈修订文档内容（增量修改模式）
+
+        策略：
+        1. 将文档按 ## 标题拆分为章节
+        2. 将全部章节 + 用户反馈发给 LLM
+        3. LLM 返回需要修改的章节索引及修改后内容（JSON格式）
+        4. 在原文档中用修改后的章节替换对应位置
+        5. 未修改的章节保持原样不变
+        """
+        if not self.api_key:
+            raise ValueError("MINIMAX_API_KEY 未设置，请联系管理员配置")
+
+        # 按 ## 标题拆分为章节
+        sections = self._split_sections(current_content)
+        if len(sections) <= 1:
+            # 文档没有章节结构，使用简单全文修订
+            return self._revise_simple(current_content, feedback, doc_type,
+                                       product_name, product_type, product_params)
+
+        # 构建定位+修改的 Prompt
+        revision_prompt = self._build_targeted_revision_prompt(
+            sections=sections,
+            feedback=feedback,
+            doc_type=doc_type,
+            product_name=product_name,
+            product_type=product_type,
+            product_params=product_params
+        )
+
+        try:
+            result = self._call_api(revision_prompt, max_tokens=8000)
+            changes = self._parse_revision_result(result, len(sections))
+
+            if not changes:
+                # LLM 认为无需修改，返回原文档
+                return current_content
+
+            # 应用修改：用修订后的章节替换原章节
+            revised = self._apply_section_changes(sections, changes)
+            return revised
+
+        except Exception as e:
+            # 增量修改失败时回退到简单全文修订
+            try:
+                return self._revise_simple(current_content, feedback, doc_type,
+                                           product_name, product_type, product_params)
+            except Exception:
+                return current_content + f"\n\n---\n> **修订失败**: {str(e)}\n"
+
+    def _split_sections(self, content: str) -> list:
+        """将文档按 ## 标题拆分为章节列表，每个元素为 {title, body, start, end}"""
+        import re
+        # 匹配 ## 开头的标题行
+        pattern = r'^## (.+)$'
+        lines = content.split('\n')
+        sections = []
+        current_title = '_head'  # 第一个 ## 之前的内容
+        current_start = 0
+        current_lines = []
+
+        for i, line in enumerate(lines):
+            m = re.match(pattern, line.strip())
+            if m:
+                # 保存前一个章节
+                if current_lines or current_title == '_head':
+                    sections.append({
+                        'index': len(sections),
+                        'title': current_title,
+                        'body': '\n'.join(current_lines),
+                        'start_line': current_start,
+                        'end_line': i - 1
+                    })
+                current_title = m.group(1).strip()
+                current_start = i
+                current_lines = [line]
+            else:
+                current_lines.append(line)
+
+        # 最后一个章节
+        if current_lines:
+            sections.append({
+                'index': len(sections),
+                'title': current_title,
+                'body': '\n'.join(current_lines),
+                'start_line': current_start,
+                'end_line': len(lines) - 1
+            })
+
+        return sections
+
+    def _build_targeted_revision_prompt(
+        self,
+        sections: list,
+        feedback: str,
+        doc_type: str,
+        product_name: str,
+        product_type: str,
+        product_params: str
+    ) -> str:
+        """构建定位式修订 Prompt — 让 LLM 只输出需要修改的章节"""
+        doc_name = DOC_TYPE_LABELS.get(doc_type, doc_type)
+
+        # 构建章节索引列表（只发送标题+摘要，节省 token）
+        section_index = []
+        for sec in sections:
+            body_preview = sec['body'][:200].replace('\n', ' ').strip()
+            section_index.append(f"[{sec['index']}] {sec['title']} — 内容预览: {body_preview}...")
+
+        # 构建完整文档（供 LLM 定位）
+        full_doc_parts = []
+        for sec in sections:
+            full_doc_parts.append(sec['body'] if sec['body'].startswith('##') else sec['body'])
+        full_doc = '\n'.join(full_doc_parts)
+
+        # 文档过长时使用摘要
+        max_doc_len = 30000
+        if len(full_doc) > max_doc_len:
+            half = max_doc_len // 2
+            full_doc = full_doc[:half] + "\n\n...（中间内容省略）...\n\n" + full_doc[-half:]
+
+        prompt = f"""你是医疗器械注册文档编辑专家。你需要根据用户反馈，**对现有文档进行精准的局部修改**。
+
+【产品信息】
+- 产品名称：{product_name}
+- 产品类型：{product_type}
+
+【文档类型】{doc_name}
+
+【章节索引】
+{chr(10).join(section_index)}
+
+【完整文档内容】（共 {len(sections)} 个章节）
+{full_doc}
+
+【用户修改意见】
+{feedback}
+
+【任务说明】
+请仔细阅读用户修改意见，找出文档中需要修改的章节，然后仅输出需要修改的章节的新内容。
+
+【输出格式 — 严格按此格式】
+对于每个需要修改的章节，按以下格式输出：
+
+---SECTION: <章节索引号>---
+<该章节修改后的完整内容（包含 ## 标题行），Markdown 格式>
+---END---
+
+如果某个章节不需要修改，则不要输出该章节。
+如果用户意见不涉及任何具体章节修改，请只输出一行：NO_CHANGE
+
+【修改原则】
+1. 只在原章节内容基础上进行用户要求的修改，不要重写整个章节
+2. 如果用户要求增加内容，在原章节内容的合适位置插入
+3. 如果用户要求更正数据，只修改数据，保留周围文字不变
+4. 未提及修改的章节不要输出
+5. 修改后的章节保持原有的 Markdown 格式和层级结构
+
+请输出："""
+        return prompt
+
+    def _parse_revision_result(self, result: str, section_count: int) -> dict:
+        """解析 LLM 返回的修订结果，返回 {section_index: revised_body} 字典"""
+        import re
+
+        if not result or 'NO_CHANGE' in result.upper():
+            return {}
+
+        changes = {}
+        pattern = r'---SECTION:\s*(\d+)\s*---\s*\n(.*?)\n---END---'
+        matches = re.findall(pattern, result, re.DOTALL)
+
+        for idx_str, new_body in matches:
+            try:
+                idx = int(idx_str)
+                if 0 <= idx < section_count:
+                    changes[idx] = new_body.strip()
+            except ValueError:
+                continue
+
+        return changes
+
+    def _apply_section_changes(self, sections: list, changes: dict) -> str:
+        """将修改后的章节应用到原文档中"""
+        result_lines = []
+        all_lines = []
+        # 重建完整行列表
+        combined = []
+        for sec in sections:
+            combined.append(sec['body'])
+
+        full_text = '\n'.join(combined)
+        lines = full_text.split('\n')
+
+        # 对每个 section，如果它在 changes 中，使用修改后的内容
+        # 否则使用原始内容
+        new_sections = []
+        for sec in sections:
+            if sec['index'] in changes:
+                new_sections.append(changes[sec['index']])
+            else:
+                new_sections.append(sec['body'])
+
+        return '\n'.join(new_sections)
+
+    def _revise_simple(
+        self,
+        current_content: str,
+        feedback: str,
+        doc_type: str,
+        product_name: str,
+        product_type: str,
+        product_params: str
+    ) -> str:
+        """简单全文修订（无章节结构时的回退方案）"""
+        doc_name = DOC_TYPE_LABELS.get(doc_type, doc_type)
+
+        prompt = f"""你是医疗器械注册文档编辑专家。请根据用户反馈修改以下文档。
+
+【产品信息】
+- 产品名称：{product_name}
+- 产品类型：{product_type}
+
+【当前文档】
+{current_content[:15000]}
+
+【用户修改意见】
+{feedback}
+
+【要求】
+只修改用户意见指出的部分，其余内容原样保留。输出修改后的完整文档（Markdown 格式）。
+在文档末尾添加：<!-- 修订说明: {feedback[:80]} -->
+
+请输出："""
+        revised = self._call_api(prompt, max_tokens=16000)
+        return revised if revised and len(revised.strip()) >= 50 else current_content
 
     def generate_content_with_fallback(
         self,
