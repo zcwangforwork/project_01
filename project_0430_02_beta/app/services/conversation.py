@@ -84,6 +84,7 @@ class ConversationSession:
             "product_params": self.product_params,
             "current_content": self.current_content,
             "history": self.history,
+            "versions": self.versions,
             "version_count": self.version_count,
             "created_at": self.created_at,
             "updated_at": self.updated_at
@@ -200,6 +201,13 @@ class ConversationManager:
         session = self.get_session(session_id)
         if session:
             session.update_content(new_content)
+            self._save_session(session)
+
+    def set_version_diff(self, session_id: str, diff_data: dict):
+        """将差异数据写入最新版本快照"""
+        session = self.get_session(session_id)
+        if session and session.versions:
+            session.versions[-1]['diff_data'] = diff_data
             self._save_session(session)
 
     def remove_session(self, session_id: str):

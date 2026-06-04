@@ -17,6 +17,7 @@ class DocumentGenerator:
         self.minimax_service = MiniMaxService()
         self.template_service = TemplateService()
         self.last_generated_content = ""  # 最近一次生成的 Markdown 内容
+        self.last_diff_data = None  # 最近一次修订的差异数据
 
     async def generate(
         self,
@@ -131,7 +132,7 @@ class DocumentGenerator:
             修订后的 Word 文件字节数据
         """
         # 调用 AI 修订内容
-        revised_content = await asyncio.to_thread(
+        revised_content, diff_data = await asyncio.to_thread(
             self.minimax_service.revise_content,
             current_content=current_content,
             feedback=feedback,
@@ -143,6 +144,7 @@ class DocumentGenerator:
 
         # 保存修订后的内容
         self.last_generated_content = revised_content
+        self.last_diff_data = diff_data
 
         # 生成 Word 文档
         doc = self.template_service.load_template(doc_type)

@@ -517,6 +517,107 @@
         }
         .preview-content hr { border: none; border-top: 1px solid #e0e0e0; margin: 16px 0; }
 
+        /* ========== 修订差异高亮 ========== */
+        .changed-section {
+            border-left: 4px solid #f59e0b;
+            margin: 8px 0;
+            padding: 8px 12px 8px 16px;
+            background: #fffbeb;
+            border-radius: 4px;
+            position: relative;
+        }
+        .changed-section .diff-badge {
+            position: absolute;
+            top: 8px;
+            right: 12px;
+            background: #f59e0b;
+            color: white;
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 8px;
+            font-weight: 600;
+        }
+        .diff-toggle-btn {
+            display: inline-block;
+            margin: 6px 0 0 0;
+            font-size: 12px;
+            cursor: pointer;
+            color: #667eea;
+            text-decoration: underline;
+            user-select: none;
+        }
+        .diff-toggle-btn:hover { color: #4f46e5; }
+        .diff-detail {
+            display: none;
+            background: #f8f9fa;
+            border: 1px solid #d0d0d0;
+            border-radius: 6px;
+            padding: 12px;
+            margin: 8px 0;
+            font-size: 13px;
+            line-height: 1.6;
+            max-height: 500px;
+            overflow: auto;
+            color: #333;
+        }
+        .diff-detail.show { display: block; }
+        .diff-detail .diff-header {
+            color: #999;
+            font-size: 11px;
+            margin-bottom: 6px;
+            border-bottom: 1px solid #e0e0e0;
+            padding-bottom: 4px;
+        }
+        /* ========== 左右对比表格样式 ========== */
+        .diff-detail table.diff {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 12px;
+        }
+        .diff-detail table.diff td {
+            padding: 2px 8px;
+            vertical-align: top;
+            border: 1px solid #e0e0e0;
+            width: 50%;
+            word-break: break-all;
+        }
+        .diff-detail td.diff_header {
+            background: #f0f0f0;
+            color: #666;
+            font-weight: 600;
+            text-align: right;
+            width: auto;
+            white-space: nowrap;
+            padding: 2px 4px;
+            font-size: 11px;
+            user-select: none;
+        }
+        .diff-detail td.diff_next {
+            display: none;
+        }
+        .diff-detail span.diff_add {
+            background: #d4edda;
+            color: #155724;
+        }
+        .diff-detail span.diff_sub {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .diff-detail span.diff_chg {
+            background: #fff3cd;
+            color: #856404;
+        }
+        .full-diff-banner {
+            background: #e8f0fe;
+            border: 1px solid #a0c4ff;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+            font-size: 13px;
+            color: #1a56db;
+        }
+
         .footer {
             text-align: center;
             margin-top: 16px;
@@ -648,6 +749,7 @@
         let currentTaskId = null;
         let currentDocContent = '';
         let currentFilename = '';
+        let currentDiffData = null;  // 最新版本修订的差异数据
 
         // ========== 附件上传逻辑 ==========
         const uploadedFileIds = [];
@@ -1069,6 +1171,14 @@
                 const session = await response.json();
                 currentDocContent = session.current_content;
 
+                // 提取最新版本的差异数据
+                if (session.versions && session.versions.length > 0) {
+                    const latestVersion = session.versions[session.versions.length - 1];
+                    currentDiffData = latestVersion.diff_data || null;
+                } else {
+                    currentDiffData = null;
+                }
+
                 // 切换到审阅模式UI
                 document.getElementById('formCard').style.display = 'none';
                 document.getElementById('chatCard').style.display = 'flex';
@@ -1077,8 +1187,8 @@
                 // 更新版本标签
                 updateVersionBadge(session.version_count);
 
-                // 渲染文档预览
-                renderPreview(session.current_content);
+                // 渲染文档预览（带差异高亮）
+                renderPreview(session.current_content, currentDiffData);
 
                 // 更新预览信息
                 document.getElementById('previewInfo').textContent =
@@ -1102,7 +1212,7 @@
         }
 
         // ========== 文档预览渲染 ==========
-        function renderPreview(markdown) {
+        function renderPreview(markdown, diffData) {
             const previewDiv = document.getElementById('previewContent');
             if (typeof marked !== 'undefined') {
                 marked.setOptions({ breaks: true, gfm: true });
@@ -1112,8 +1222,104 @@
                 previewDiv.innerHTML = '<pre style="white-space:pre-wrap;font-family:inherit;">' +
                     escapeHtml(markdown) + '</pre>';
             }
+
+            // 应用差异高亮
+            if (diffData) {
+                if (diffData.mode === 'sectional') {
+                    applyDiffHighlights(previewDiv, diffData, markdown);
+                } else if (diffData.mode === 'full') {
+                    var banner = document.createElement('div');
+                    banner.className = 'full-diff-banner';
+                    banner.innerHTML = '<strong>全文修订</strong> &mdash; ' +
+                        escapeHtml(diffData.feedback || '') +
+                        ' <span class="diff-toggle-btn" onclick="toggleDiff(this)">查看差异</span>' +
+                        '<div class="diff-detail"><div class="diff-header">全文修订对比</div>' +
+                        (diffData.diff_html || '') + '</div>';
+                    previewDiv.insertBefore(banner, previewDiv.firstChild);
+                }
+            }
             // 滚动到顶部
             previewDiv.scrollTop = 0;
+        }
+
+        // ========== 差异高亮渲染 ==========
+        function applyDiffHighlights(container, diffData, rawMarkdown) {
+            if (!diffData || diffData.mode !== 'sectional' || !diffData.sections) return;
+
+            var sections = diffData.sections;
+            // 按标题匹配：从 markdown 源中提取 ## 标题顺序
+            var mdSections = rawMarkdown.split(/^## /m);
+            var sectionOrder = [];
+            for (var i = 1; i < mdSections.length; i++) {
+                var titleLine = mdSections[i].split('\n')[0].trim();
+                sectionOrder.push(titleLine);
+            }
+
+            // 建立标题→差异数据的映射
+            var changedTitles = {};
+            for (var idx in sections) {
+                if (sections.hasOwnProperty(idx)) {
+                    changedTitles[sections[idx].title] = {
+                        index: idx,
+                        diff_html: sections[idx].diff_html
+                    };
+                }
+            }
+
+            // 遍历所有 <h2>，匹配被修改的章节
+            var h2Elements = container.querySelectorAll('h2');
+            for (var j = 0; j < h2Elements.length; j++) {
+                var h2 = h2Elements[j];
+                var titleText = h2.textContent.trim();
+                if (changedTitles.hasOwnProperty(titleText)) {
+                    var diffInfo = changedTitles[titleText];
+
+                    // 将当前 h2 及其后续内容（到下一个 h2 或结尾）包裹进 changed-section
+                    var wrapper = document.createElement('div');
+                    wrapper.className = 'changed-section';
+
+                    var badge = document.createElement('span');
+                    badge.className = 'diff-badge';
+                    badge.textContent = '已修改';
+                    wrapper.appendChild(badge);
+
+                    // 移动 h2 进入 wrapper
+                    h2.parentNode.insertBefore(wrapper, h2);
+                    wrapper.appendChild(h2);
+                    // 移动后续兄弟节点直到遇到下一个 h2
+                    var current = wrapper.nextSibling;
+                    while (current && current.tagName !== 'H2') {
+                        var next = current.nextSibling;
+                        wrapper.appendChild(current);
+                        current = next;
+                    }
+
+                    // 添加差异切换按钮
+                    var toggle = document.createElement('span');
+                    toggle.className = 'diff-toggle-btn';
+                    toggle.textContent = '查看差异';
+                    toggle.setAttribute('onclick', 'toggleDiff(this)');
+                    wrapper.appendChild(toggle);
+
+                    // 添加差异详情区
+                    var detail = document.createElement('div');
+                    detail.className = 'diff-detail';
+                    var header = document.createElement('div');
+                    header.className = 'diff-header';
+                    header.textContent = '章节: ' + titleText;
+                    detail.appendChild(header);
+                    detail.innerHTML += diffInfo.diff_html;
+                    wrapper.appendChild(detail);
+                }
+            }
+        }
+
+        function toggleDiff(btn) {
+            var detail = btn.nextElementSibling;
+            if (detail && detail.classList.contains('diff-detail')) {
+                var isShowing = detail.classList.toggle('show');
+                btn.textContent = isShowing ? '隐藏差异' : '查看差异';
+            }
         }
 
         // ========== 提交反馈修订 ==========
@@ -1181,8 +1387,16 @@
                         const session = await sessionResp.json();
                         currentDocContent = session.current_content;
 
+                        // 提取最新版本的差异数据
+                        if (session.versions && session.versions.length > 0) {
+                            const latestVersion = session.versions[session.versions.length - 1];
+                            currentDiffData = latestVersion.diff_data || null;
+                        } else {
+                            currentDiffData = null;
+                        }
+
                         updateVersionBadge(session.version_count);
-                        renderPreview(session.current_content);
+                        renderPreview(session.current_content, currentDiffData);
 
                         // 添加系统回复到聊天
                         addChatMessage('assistant', '文档已根据您的意见完成修订（' +

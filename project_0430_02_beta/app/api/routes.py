@@ -250,6 +250,10 @@ def _run_revision(task_id: str, session_id: str, feedback: str):
         # 更新会话中的文档内容
         conversation_manager.update_content(session_id, generator.last_generated_content)
 
+        # 将差异数据写入版本快照，供前端展示修订对比
+        if generator.last_diff_data:
+            conversation_manager.set_version_diff(session_id, generator.last_diff_data)
+
         label = DOC_TYPE_LABELS.get(session.doc_type, session.doc_type)
         filename = f"{session.product_name}_{label}_修订版.docx"
 

@@ -5,10 +5,12 @@ MiniMax API Service - AI内容生成
 import os
 import json
 import time
+import threading
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 
 from app.services.doc_types import DOC_TYPE_LABELS
 from app.services.prompt_engineer import DOC_TYPE_SPECIFIC_PROMPTS
@@ -1228,6 +1230,9 @@ class MiniMaxService:
         self.use_agent_search = _try_init_agent_search()  # Agent SDK 搜索优先
         self.use_web_search = _try_init_web_search()      # Playwright 作为回退
         self.search_log = []  # 记录每个章节使用的搜索方式
+        self._search_log_lock = threading.Lock()  # 线程安全锁
+        self.max_concurrent = 3  # 章节LLM调用最大并发数
+        self.max_search_workers = 3  # Phase 1 搜索最大并发数
 
     def generate_content(
         self,
@@ -1613,6 +1618,188 @@ class MiniMaxService:
 """
         return fallback
 
+    def _rag_retrieve_for_chapter(
+        self,
+        chapter_query: str,
+        doc_type: str
+    ) -> Tuple[list, list]:
+        """
+        为单个章节执行 RAG 检索（线程安全）
+
+        Returns:
+            (chunks, uploads_chunks) — chunks 已合并 uploads_chunks
+        """
+        # 1. 检查 uploads collection
+        uploads_chunks = []
+        uploads_has_data = False
+        try:
+            from app.services.rag.vector_store import VectorStore
+            uploads_vs = VectorStore(collection_name="uploads")
+            if uploads_vs.count() > 0:
+                uploads_has_data = True
+                uploads_chunks = uploads_vs.retrieve_hybrid(
+                    doc_type=doc_type,
+                    query=chapter_query,
+                    top_k=5,
+                    similarity_threshold=0.3,
+                    vector_weight=0.7
+                )
+                if uploads_chunks:
+                    print(f"    附件检索: 从uploads collection检索到 {len(uploads_chunks)} 条相关段落")
+        except Exception:
+            pass
+
+        # 2. 主知识库检索
+        main_k = 13 if not uploads_has_data else 8
+        chunks = []
+        if self.use_rag:
+            for attempt in range(2):
+                try:
+                    vector_store = _vector_store()
+                    chunks = vector_store.retrieve_hybrid(
+                        doc_type=doc_type,
+                        query=chapter_query,
+                        top_k=main_k,
+                        similarity_threshold=0.3,
+                        vector_weight=0.7
+                    )
+                    break
+                except Exception as e:
+                    if attempt == 0:
+                        print(f"    RAG检索首次失败，重试中: {e}")
+                        continue
+                    print(f"    [WARNING] RAG检索最终失败，回退到无RAG模式: {e}")
+
+        # 合并
+        chunks.extend(uploads_chunks)
+        return chunks, uploads_chunks
+
+    def _search_for_chapter(
+        self,
+        chapter_name: str,
+        product_type: str,
+        product_params: str,
+        doc_type: str
+    ) -> Tuple[str, list, str]:
+        """
+        为单个章节执行 Web 搜索（线程安全）
+
+        Returns:
+            (web_info, downloaded_files, search_method)
+        """
+        web_info = ""
+        downloaded_files = []
+        search_method = "none"
+
+        if self.use_agent_search and _agent_search_service:
+            try:
+                web_info, _ = _agent_search_service.search_regulations(
+                    chapter_name=chapter_name,
+                    product_type=product_type,
+                    product_params=product_params,
+                    doc_type=doc_type
+                )
+                if web_info:
+                    print(f"    Agent搜索 [{chapter_name}]: 获取到 {len(web_info)} 字符")
+                    search_method = "agent"
+            except Exception as e:
+                print(f"    [WARNING] Agent搜索失败 [{chapter_name}]: {e}")
+
+        if not web_info and self.use_web_search and _web_search_service:
+            try:
+                web_info, downloaded_files = _web_search_service.search_regulations(
+                    chapter_name=chapter_name,
+                    product_type=product_type,
+                    product_params=product_params,
+                    max_results=3,
+                    enable_deep_scrape=True,
+                    enable_file_download=True,
+                    doc_type=doc_type
+                )
+                if web_info:
+                    print(f"    Web搜索(Playwright) [{chapter_name}]: 获取到 {len(web_info)} 字符")
+                    search_method = "playwright"
+                if downloaded_files:
+                    print(f"    下载文件 [{chapter_name}]: {len(downloaded_files)} 个")
+                    self._add_files_to_knowledge_base(downloaded_files, doc_type)
+            except Exception as e:
+                print(f"    [WARNING] Web搜索失败 [{chapter_name}]: {e}")
+
+        # 线程安全写入 search_log
+        with self._search_log_lock:
+            self.search_log.append({
+                "chapter": chapter_name,
+                "method": search_method
+            })
+
+        return web_info, downloaded_files, search_method
+
+    def _build_chapter_prompt(
+        self,
+        index: int,
+        chapter_name: str,
+        chapter_query: str,
+        chunks: list,
+        uploads_chunks: list,
+        web_info: str,
+        doc_type: str,
+        product_name: str,
+        product_type: str,
+        product_params: str,
+        attachment_content: str
+    ) -> str:
+        """为单个章节构建增强后的 prompt（纯函数，线程安全）"""
+        # 构建基础 prompt
+        template = self._get_prompt_template(doc_type)
+        base_prompt = template.format(
+            product_name=str(product_name),
+            product_type=str(product_type),
+            product_params=str(product_params) if product_params else "无特殊参数",
+            chapter=chapter_name
+        )
+
+        # 注入 RAG 上下文
+        all_chunks = list(chunks) if chunks else []
+        if uploads_chunks:
+            all_chunks.extend(uploads_chunks)
+        if all_chunks and self.use_rag and _rag_prompt_builder:
+            enhanced_prompt = _rag_prompt_builder(
+                base_prompt=base_prompt,
+                doc_type=doc_type,
+                product_name=product_name,
+                product_type=product_type,
+                product_params=product_params,
+                retrieved_chunks=all_chunks
+            )
+            print(f"    RAG增强 [{chapter_name}]: {len(all_chunks)} 条段落")
+        elif all_chunks:
+            chunk_texts = "\n---\n".join(
+                c.get("text", "") for c in all_chunks[:5]
+            )
+            enhanced_prompt = base_prompt + "\n\n【参考文档片段】\n" + chunk_texts
+            print(f"    直接注入 [{chapter_name}]: {len(all_chunks)} 条段落")
+        else:
+            enhanced_prompt = base_prompt
+
+        # 注入附件内容 — 第一章全文注入，后续章节关键词匹配
+        if attachment_content:
+            if index == 1:
+                enhanced_prompt = enhanced_prompt.rstrip() + "\n\n" + \
+                    "【附件文档 - 产品背景信息】\n" + \
+                    "以下内容来自用户上传的产品相关文档，请充分利用这些信息生成内容：\n" + \
+                    attachment_content[:3000] + "\n"
+            else:
+                relevant = self._match_relevant_paragraphs(attachment_content, chapter_query, max_chars=1500)
+                if relevant:
+                    enhanced_prompt = enhanced_prompt.rstrip() + "\n\n" + \
+                        "【附件文档 - 相关段落】\n" + relevant + "\n"
+
+        # 注入 Web 搜索上下文
+        if web_info:
+            enhanced_prompt = enhanced_prompt.rstrip() + "\n\n" + "【相关法规标准 - 来自网络搜索】\n" + web_info + "\n"
+
+        return enhanced_prompt
+
     def _generate_by_chapters(
         self,
         doc_type: str,
@@ -1624,19 +1811,100 @@ class MiniMaxService:
         """
         分章节生成文档内容并汇总
 
-        流程：获取章节结构 -> 逐章生成内容 -> 汇总成完整文档
+        流程：获取章节结构 → [Phase 1a: RAG串行 + Phase 1b: 搜索并行 + Phase 1c: Prompt串行]
+             → Phase 2: 并行调用LLM API → Phase 3: 按原始顺序汇总成完整文档
         """
         if not self.api_key:
             raise ValueError("MINIMAX_API_KEY 未设置，请联系管理员配置")
 
-        # 获取文档章节结构
         chapters = DOC_CHAPTERS.get(doc_type, DEFAULT_CHAPTERS)
-
-        # 分章节生成
-        full_document = []
         doc_name = DOC_TYPE_LABELS.get(doc_type, doc_type)
 
-        # 添加文档标题
+        print(f"开始分章节生成文档（共 {len(chapters)} 章）...")
+        self.search_log = []  # 重置搜索日志
+
+        # 预计算各章节查询
+        chapter_queries = {}
+        for chapter in chapters:
+            chapter_queries[chapter["name"]] = f"{chapter['query']} {product_name} {product_type}"
+
+        # ========== Phase 1a: 串行 RAG 检索（速度快 ~200ms/章，ChromaDB 读安全） ==========
+        print(f"\nPhase 1a: 串行 RAG 检索（{len(chapters)} 章）...")
+        chapter_rag = {}  # chapter_name -> (chunks, uploads_chunks)
+        for i, chapter in enumerate(chapters, 1):
+            name = chapter["name"]
+            print(f"  RAG [{i}/{len(chapters)}] {name}...")
+            chapter_rag[name] = self._rag_retrieve_for_chapter(chapter_queries[name], doc_type)
+
+        # ========== Phase 1b: 并行 Web 搜索（速度慢，并行化大幅提速） ==========
+        print(f"\nPhase 1b: 并行 Web 搜索（{len(chapters)} 章，最多 {self.max_search_workers} 路并发）...")
+        chapter_search = {}  # chapter_name -> (web_info, downloaded_files, search_method)
+
+        with ThreadPoolExecutor(max_workers=self.max_search_workers) as executor:
+            future_to_name = {}
+            for chapter in chapters:
+                future = executor.submit(
+                    self._search_for_chapter,
+                    chapter["name"], product_type, product_params, doc_type
+                )
+                future_to_name[future] = chapter["name"]
+
+            for future in as_completed(future_to_name):
+                name = future_to_name[future]
+                try:
+                    chapter_search[name] = future.result()
+                except Exception as e:
+                    print(f"    [WARNING] 搜索线程异常 [{name}]: {e}")
+                    chapter_search[name] = ("", [], "error")
+
+        # ========== Phase 1c: 串行构建 Prompt（速度快） ==========
+        print(f"\nPhase 1c: 构建 Prompt（{len(chapters)} 章）...")
+        chapter_inputs = []
+
+        for i, chapter in enumerate(chapters, 1):
+            name = chapter["name"]
+            chunks, uploads_chunks = chapter_rag[name]
+            web_info, _, _ = chapter_search[name]
+
+            enhanced_prompt = self._build_chapter_prompt(
+                index=i,
+                chapter_name=name,
+                chapter_query=chapter_queries[name],
+                chunks=chunks,
+                uploads_chunks=uploads_chunks,
+                web_info=web_info,
+                doc_type=doc_type,
+                product_name=product_name,
+                product_type=product_type,
+                product_params=product_params,
+                attachment_content=attachment_content
+            )
+
+            chapter_inputs.append((i, name, enhanced_prompt))
+            print(f"  [{i}/{len(chapters)}] {name} Prompt 构建完成 ({len(enhanced_prompt)} 字符)")
+
+        # ========== Phase 2: 并行调用 LLM API ==========
+        print(f"\nPhase 2: 并行调用LLM API（{len(chapter_inputs)} 章，最多 {self.max_concurrent} 路并发）...")
+
+        results = {}  # index -> (content, error)
+
+        with ThreadPoolExecutor(max_workers=self.max_concurrent) as executor:
+            future_to_idx = {
+                executor.submit(self._call_api, prompt): (idx, name)
+                for idx, name, prompt in chapter_inputs
+            }
+            for future in as_completed(future_to_idx):
+                idx, name = future_to_idx[future]
+                try:
+                    content = future.result()
+                    results[idx] = (content, None)
+                    print(f"  [{idx}/{len(chapters)}] {name} 完成 ({len(content)} 字符)")
+                except Exception as e:
+                    results[idx] = ("", str(e))
+                    print(f"  [{idx}/{len(chapters)}] {name} 失败: {e}")
+
+        # ========== Phase 3: 按原始顺序组装文档 ==========
+        full_document = []
         full_document.append(f"# {product_name} - {doc_name}\n\n")
         full_document.append(f"**产品信息：**\n")
         full_document.append(f"- 产品名称：{product_name}\n")
@@ -1646,172 +1914,14 @@ class MiniMaxService:
             full_document.append(f"\n**附件材料：** 已提供产品相关参考文档\n")
         full_document.append("---\n\n")
 
-        print(f"开始分章节生成文档（共 {len(chapters)} 章）...")
-        self.search_log = []  # 重置搜索日志
-
-        for i, chapter in enumerate(chapters, 1):
-            chapter_name = chapter["name"]
-            chapter_query = f"{chapter['query']} {product_name} {product_type}"
-
-            print(f"  [{i}/{len(chapters)}] 生成章节：{chapter_name}...")
-
-            # 1a. 先检查 uploads collection，决定主知识库检索数量
-            uploads_chunks = []
-            uploads_has_data = False
-            try:
-                from app.services.rag.vector_store import VectorStore
-                uploads_vs = VectorStore(collection_name="uploads")
-                if uploads_vs.count() > 0:
-                    uploads_has_data = True
-                    uploads_chunks = uploads_vs.retrieve_hybrid(
-                        doc_type=doc_type,
-                        query=chapter_query,
-                        top_k=5,
-                        similarity_threshold=0.3,
-                        vector_weight=0.7
-                    )
-                    if uploads_chunks:
-                        print(f"    附件检索: 从uploads collection检索到 {len(uploads_chunks)} 条相关段落")
-            except Exception:
-                pass  # uploads collection 不可用时静默跳过
-
-            # 1b. 主知识库检索：uploads为空时retrieve 13条，否则retrieve 8条
-            main_k = 13 if not uploads_has_data else 8
-            chunks = []
-            if self.use_rag:
-                for attempt in range(2):  # 重试1次
-                    try:
-                        vector_store = _vector_store()
-                        chunks = vector_store.retrieve_hybrid(
-                            doc_type=doc_type,
-                            query=chapter_query,
-                            top_k=main_k,
-                            similarity_threshold=0.3,
-                            vector_weight=0.7
-                        )
-                        break  # 成功，跳出重试循环
-                    except Exception as e:
-                        if attempt == 0:
-                            print(f"    RAG检索首次失败，重试中: {e}")
-                            continue
-                        print(f"    [WARNING] RAG检索最终失败，回退到无RAG模式: {e}")
-
-            # 合并检索结果
-            chunks.extend(uploads_chunks)
-
-            # 2. 尝试Web搜索补充（如可用）
-            # 优先使用 Agent SDK 智能搜索，失败/不可用时回退到 Playwright
-            web_info = ""
-            downloaded_files = []
-            search_method = "none"  # 记录当前章节使用的搜索方式
-            if self.use_agent_search and _agent_search_service:
-                try:
-                    web_info, _ = _agent_search_service.search_regulations(
-                        chapter_name=chapter_name,
-                        product_type=product_type,
-                        product_params=product_params,
-                        doc_type=doc_type
-                    )
-                    if web_info:
-                        print(f"    Agent搜索: 获取到 {len(web_info)} 字符相关信息")
-                        search_method = "agent"
-                except Exception as e:
-                    print(f"    [WARNING] Agent搜索失败: {e}")
-
-            # Agent 搜索无结果时，回退到 Playwright
-            if not web_info and self.use_web_search and _web_search_service:
-                try:
-                    web_info, downloaded_files = _web_search_service.search_regulations(
-                        chapter_name=chapter_name,
-                        product_type=product_type,
-                        product_params=product_params,
-                        max_results=3,
-                        enable_deep_scrape=True,
-                        enable_file_download=True,
-                        doc_type=doc_type
-                    )
-                    if web_info:
-                        print(f"    Web搜索(Playwright): 获取到 {len(web_info)} 字符相关信息")
-                        search_method = "playwright"
-                    if downloaded_files:
-                        print(f"    下载文件: {len(downloaded_files)} 个")
-                        # 将下载的文件添加到知识库
-                        self._add_files_to_knowledge_base(downloaded_files, doc_type)
-                except Exception as e:
-                    print(f"    [WARNING] Web搜索失败: {e}")
-
-            self.search_log.append({
-                "chapter": chapter_name,
-                "method": search_method
-            })
-
-            # 3. 构建本章Prompt
-            template = self._get_prompt_template(doc_type)
-            base_prompt = template.format(
-                product_name=str(product_name),
-                product_type=str(product_type),
-                product_params=str(product_params) if product_params else "无特殊参数",
-                chapter=chapter_name
-            )
-
-            # 4. 注入RAG上下文（如检索到相关内容）— 合并 all + uploads
-            all_chunks = list(chunks) if chunks else []
-            if uploads_chunks:
-                all_chunks.extend(uploads_chunks)
-            if all_chunks and self.use_rag and _rag_prompt_builder:
-                enhanced_prompt = _rag_prompt_builder(
-                    base_prompt=base_prompt,
-                    doc_type=doc_type,
-                    product_name=product_name,
-                    product_type=product_type,
-                    product_params=product_params,
-                    retrieved_chunks=all_chunks
-                )
-                print(f"    RAG增强: 检索到 {len(all_chunks)} 条相关段落 (all:{len(chunks)}, uploads:{len(uploads_chunks)})")
-            elif all_chunks:
-                # 有 chunks 但 RAG builder 不可用 — 直接追加为参考文本
-                chunk_texts = "\n---\n".join(
-                    c.get("text", "") for c in all_chunks[:5]
-                )
-                enhanced_prompt = base_prompt + "\n\n【参考文档片段】\n" + chunk_texts
-                print(f"    直接注入: {len(all_chunks)} 条参考段落 (all:{len(chunks)}, uploads:{len(uploads_chunks)})")
+        for idx, chapter_name, prompt in chapter_inputs:
+            content, error = results.get(idx, ("", "未知错误"))
+            full_document.append(f"## 第{idx}章 {chapter_name}\n\n")
+            if error:
+                full_document.append(f"（内容生成失败: {error}）\n\n")
             else:
-                enhanced_prompt = base_prompt
-
-            # 5. 注入附件内容 — 第一章全文注入，后续章节关键词匹配
-            if attachment_content:
-                if i == 1:
-                    # 第一章：注入完整附件文本作为产品背景
-                    enhanced_prompt = enhanced_prompt.rstrip() + "\n\n" + \
-                        "【附件文档 - 产品背景信息】\n" + \
-                        "以下内容来自用户上传的产品相关文档，请充分利用这些信息生成内容：\n" + \
-                        attachment_content[:3000] + "\n"  # 限制3000字避免超token
-                else:
-                    # 后续章节：简单关键词匹配注入相关段落
-                    relevant = self._match_relevant_paragraphs(attachment_content, chapter_query, max_chars=1500)
-                    if relevant:
-                        enhanced_prompt = enhanced_prompt.rstrip() + "\n\n" + \
-                            "【附件文档 - 相关段落】\n" + relevant + "\n"
-
-            # 6. 注入Web搜索上下文（如获取到相关内容）
-            if web_info:
-                enhanced_prompt = enhanced_prompt.rstrip() + "\n\n" + "【相关法规标准 - 来自网络搜索】\n" + web_info + "\n"
-
-            # 7. 生成章节内容
-            try:
-                chapter_content = self._call_api(enhanced_prompt)
-                full_document.append(f"## 第{i}章 {chapter_name}\n\n")
-                full_document.append(chapter_content)
+                full_document.append(content)
                 full_document.append("\n\n")
-                print(f"    完成 ({len(chapter_content)} 字符)")
-            except Exception as e:
-                print(f"    失败: {e}")
-                full_document.append(f"## 第{i}章 {chapter_name}\n\n")
-                full_document.append(f"（内容生成失败: {str(e)}）\n\n")
-
-            # 章节间休息一下，避免API限流
-            if i < len(chapters):
-                time.sleep(0.5)
 
         print(f"文档生成完成！总计 {len(''.join(full_document))} 字符")
         return "".join(full_document)
@@ -1897,16 +2007,19 @@ class MiniMaxService:
         product_name: str,
         product_type: str,
         product_params: str = ""
-    ) -> str:
+    ):
         """
         基于用户反馈修订文档内容（增量修改模式）
 
         策略：
         1. 将文档按 ## 标题拆分为章节
         2. 将全部章节 + 用户反馈发给 LLM
-        3. LLM 返回需要修改的章节索引及修改后内容（JSON格式）
+        3. LLM 返回需要修改的章节索引及修改后内容
         4. 在原文档中用修改后的章节替换对应位置
         5. 未修改的章节保持原样不变
+
+        Returns:
+            (revised_content: str, diff_data: dict|None)
         """
         if not self.api_key:
             raise ValueError("MINIMAX_API_KEY 未设置，请联系管理员配置")
@@ -1915,8 +2028,10 @@ class MiniMaxService:
         sections = self._split_sections(current_content)
         if len(sections) <= 1:
             # 文档没有章节结构，使用简单全文修订
-            return self._revise_simple(current_content, feedback, doc_type,
-                                       product_name, product_type, product_params)
+            result = self._revise_simple(current_content, feedback, doc_type,
+                                         product_name, product_type, product_params)
+            diff_data = self._compute_full_diff(current_content, result, feedback)
+            return result, diff_data
 
         # 构建定位+修改的 Prompt
         revision_prompt = self._build_targeted_revision_prompt(
@@ -1934,19 +2049,23 @@ class MiniMaxService:
 
             if not changes:
                 # LLM 认为无需修改，返回原文档
-                return current_content
+                return current_content, None
 
+            # 计算差异数据
+            diff_data = self._compute_section_diffs(sections, changes)
             # 应用修改：用修订后的章节替换原章节
             revised = self._apply_section_changes(sections, changes)
-            return revised
+            return revised, diff_data
 
         except Exception as e:
             # 增量修改失败时回退到简单全文修订
             try:
-                return self._revise_simple(current_content, feedback, doc_type,
-                                           product_name, product_type, product_params)
+                result = self._revise_simple(current_content, feedback, doc_type,
+                                             product_name, product_type, product_params)
+                diff_data = self._compute_full_diff(current_content, result, feedback)
+                return result, diff_data
             except Exception:
-                return current_content + f"\n\n---\n> **修订失败**: {str(e)}\n"
+                return current_content + f"\n\n---\n> **修订失败**: {str(e)}\n", None
 
     def _split_sections(self, content: str) -> list:
         """将文档按 ## 标题拆分为章节列表，每个元素为 {title, body, start, end}"""
@@ -2102,6 +2221,55 @@ class MiniMaxService:
                 new_sections.append(sec['body'])
 
         return '\n'.join(new_sections)
+
+    def _compute_section_diffs(self, sections: list, changes: dict) -> dict:
+        """为被修改的章节生成左右对比HTML表格，返回可供前端渲染的差异数据"""
+        import difflib
+
+        section_diffs = {}
+        for sec in sections:
+            idx = sec['index']
+            if idx in changes:
+                old_text = sec['body']
+                new_text = changes[idx]
+                old_lines = old_text.splitlines(keepends=True)
+                new_lines = new_text.splitlines(keepends=True)
+
+                html_diff = difflib.HtmlDiff().make_table(
+                    new_lines, old_lines,
+                    fromdesc="当前版本",
+                    todesc="原版",
+                    context=True,
+                    numlines=2
+                )
+                section_diffs[str(idx)] = {
+                    "title": sec['title'],
+                    "diff_html": html_diff
+                }
+
+        return {
+            "mode": "sectional",
+            "sections": section_diffs
+        }
+
+    def _compute_full_diff(self, old_content: str, new_content: str, feedback: str) -> dict:
+        """为全文修订模式生成左右对比HTML表格"""
+        import difflib
+
+        old_lines = old_content.splitlines(keepends=True)
+        new_lines = new_content.splitlines(keepends=True)
+        html_diff = difflib.HtmlDiff().make_table(
+            new_lines, old_lines,
+            fromdesc="当前版本",
+            todesc="原版",
+            context=True,
+            numlines=2
+        )
+        return {
+            "mode": "full",
+            "feedback": feedback[:80],
+            "diff_html": html_diff
+        }
 
     def _revise_simple(
         self,
