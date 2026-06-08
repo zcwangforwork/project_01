@@ -40,10 +40,25 @@ def _run_generation(task_id: str, doc_type: str, product_name: str, product_type
     """在后台线程中执行文档生成"""
     try:
         tasks[task_id]["status"] = "generating"
-        tasks[task_id]["progress"] = 10
-        tasks[task_id]["message"] = "正在生成文档内容..."
+        tasks[task_id]["progress"] = 5
+        tasks[task_id]["message"] = "正在生成文档结构大纲..."
 
-        generator = DocumentGenerator()
+        # 进度回调：根据阶段更新任务状态
+        def on_progress(phase, current, total, message):
+            if phase == "outline":
+                progress = 10
+            elif phase == "rag":
+                # RAG阶段占 10-30%
+                progress = 10 + int(20 * current / max(total, 1))
+            elif phase == "generate":
+                # 生成阶段占 30-95%
+                progress = 30 + int(65 * current / max(total, 1))
+            else:
+                progress = 10
+            tasks[task_id]["progress"] = min(progress, 95)
+            tasks[task_id]["message"] = message
+
+        generator = DocumentGenerator(progress_callback=on_progress)
 
         # 同步生成文档（在线程中运行，不阻塞事件循环）
         import asyncio
@@ -81,6 +96,7 @@ def _run_generation(task_id: str, doc_type: str, product_name: str, product_type
         tasks[task_id]["file_bytes"] = file_bytes
         tasks[task_id]["filename"] = filename
         tasks[task_id]["search_log"] = generator.search_log
+        tasks[task_id]["timing_log"] = generator.timing_log
         tasks[task_id]["session_id"] = session_id
         tasks[task_id]["doc_content"] = generator.last_generated_content
 
@@ -136,7 +152,8 @@ async def get_task_status(task_id: str):
         "progress": task["progress"],
         "message": task["message"],
         "filename": task.get("filename", ""),
-        "search_log": task.get("search_log", [])
+        "search_log": task.get("search_log", []),
+        "timing_log": task.get("timing_log", {})
     }
     # 生成完成时返回 session_id 供前端进入修订模式
     if task["status"] == "completed" and task.get("session_id"):

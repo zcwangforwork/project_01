@@ -1231,8 +1231,10 @@ class MiniMaxService:
         self.use_web_search = _try_init_web_search()      # Playwright 作为回退
         self.search_log = []  # 记录每个章节使用的搜索方式
         self._search_log_lock = threading.Lock()  # 线程安全锁
-        self.max_concurrent = 3  # 章节LLM调用最大并发数
-        self.max_search_workers = 3  # Phase 1 搜索最大并发数
+        self.max_concurrent = 12  # 小节LLM调用最大并发数（提速优化：6→12，火山方舟单key RPM可支撑）
+        self.max_search_workers = 12  # 小节Web搜索最大并发数（提速优化：6→12，Agent SDK 纯API调用占用小，Playwright 回退时浏览器实例池有限但有 Agent 优先，12 路安全）
+        self.progress_callback = None  # 进度回调函数: callback(phase, current, total, message)
+        self.timing_log = {}  # 计时日志: {"outline": float, "rag_total": float, "search_total": float, "sections": [...], "chapters": [...], "total": float}
 
     def generate_content(
         self,
@@ -1800,6 +1802,200 @@ class MiniMaxService:
 
         return enhanced_prompt
 
+    def _build_section_prompt(
+        self,
+        index: int,
+        chapter_name: str,
+        section_name: str,
+        section_query: str,
+        chunks: list,
+        uploads_chunks: list,
+        web_info: str,
+        doc_type: str,
+        product_name: str,
+        product_type: str,
+        product_params: str,
+        attachment_content: str,
+        total_sections: int = 1
+    ) -> str:
+        """为单个小节构建增强后的 prompt（纯函数，线程安全）"""
+        doc_name = DOC_TYPE_LABELS.get(doc_type, doc_type)
+
+        # 构建小节专用 prompt
+        section_prompt = f"""你是一位资深的医疗器械注册文档编写专家，拥有15年以上医疗器械行业经验。请根据以下信息，生成文档中指定小节的详细内容。
+
+【文档类型】{doc_name}
+【产品名称】{product_name}
+【产品类型】{product_type}
+【产品参数】{product_params if product_params else '无特殊参数'}
+
+【当前章节】{chapter_name}
+【当前小节】{section_name}
+
+【重要要求】
+请参考上方的【参考范文】和【相关法规标准】部分（如果提供），生成"{chapter_name}"章节中"{section_name}"小节的完整详细内容。
+
+特别注意：
+0. 【强制要求】所有内容必须使用中文，不要使用任何英文单词或短语，除了标准号（如GB 9706.1-2020、ISO 14971:2019等）和必要缩写中必须包含的部分
+1. 内容必须极其细致和具体，每个段落都要有实质性内容，不能只写框架标题
+2. 技术参数要具体、可测量、有明确的数值范围
+3. 表格要填写完整，不能留"（描述）"或"待填写"等占位符
+4. 标准号和条款引用要准确
+5. 使用专业、规范的医疗器械行业术语
+6. 只生成本小节的内容，不要重复其他小节的内容，不要添加章节标题
+7. 生成内容的详细程度要像实际可用于注册申报的正式文档一样
+"""
+
+        # 注入 RAG 上下文
+        all_chunks = list(chunks) if chunks else []
+        if uploads_chunks:
+            all_chunks.extend(uploads_chunks)
+        if all_chunks and self.use_rag and _rag_prompt_builder:
+            enhanced_prompt = _rag_prompt_builder(
+                base_prompt=section_prompt,
+                doc_type=doc_type,
+                product_name=product_name,
+                product_type=product_type,
+                product_params=product_params,
+                retrieved_chunks=all_chunks
+            )
+            print(f"    RAG增强 [{chapter_name}-{section_name}]: {len(all_chunks)} 条段落")
+        elif all_chunks:
+            chunk_texts = "\n---\n".join(
+                c.get("text", "") for c in all_chunks[:5]
+            )
+            enhanced_prompt = section_prompt + "\n\n【参考文档片段】\n" + chunk_texts
+            print(f"    直接注入 [{chapter_name}-{section_name}]: {len(all_chunks)} 条段落")
+        else:
+            enhanced_prompt = section_prompt
+
+        # 注入附件内容 — 第一个小节全文注入，后续小节关键词匹配
+        if attachment_content:
+            if index == 1:
+                enhanced_prompt = enhanced_prompt.rstrip() + "\n\n" + \
+                    "【附件文档 - 产品背景信息】\n" + \
+                    "以下内容来自用户上传的产品相关文档，请充分利用这些信息生成内容：\n" + \
+                    attachment_content[:3000] + "\n"
+            else:
+                relevant = self._match_relevant_paragraphs(attachment_content, section_query, max_chars=1500)
+                if relevant:
+                    enhanced_prompt = enhanced_prompt.rstrip() + "\n\n" + \
+                        "【附件文档 - 相关段落】\n" + relevant + "\n"
+
+        # 注入 Web 搜索上下文
+        if web_info:
+            enhanced_prompt = enhanced_prompt.rstrip() + "\n\n" + "【相关法规标准 - 来自网络搜索】\n" + web_info + "\n"
+
+        return enhanced_prompt
+
+    def _generate_outline(
+        self,
+        doc_type: str,
+        product_name: str,
+        product_type: str,
+        product_params: str,
+        chapters: list,
+        doc_name: str
+    ) -> list:
+        """
+        第一阶段：生成文档结构大纲（章节 → 小节）
+
+        调用 LLM 根据已有章节定义，为每个章节生成小节列表。
+        返回格式: [{"chapter_id": "ch1", "chapter_name": "概述", "sections": [{"id": "s1.1", "name": "目的", "query": "..."}, ...]}, ...]
+        """
+        # 构建章节描述
+        chapter_descriptions = []
+        for ch in chapters:
+            chapter_descriptions.append(f"- 第{chapters.index(ch)+1}章: {ch['name']}（检索关键词: {ch['query']}）")
+
+        outline_prompt = f"""你是一位资深的医疗器械注册文档编写专家。请为以下文档生成详细的小节结构大纲。
+
+【文档类型】{doc_name}
+【产品名称】{product_name}
+【产品类型】{product_type}
+【产品参数】{product_params if product_params else '无特殊参数'}
+
+【已有章节结构】
+{chr(10).join(chapter_descriptions)}
+
+【任务要求】
+请为上述每一章生成详细的小节（section）列表。每个小节应有明确且具体的名称和检索关键词。
+要求：
+1. 每个章节至少包含2-4个小节，内容粒度要细致
+2. 小节名称要具体、有实质性内容指向，不能只是"概述"等笼统标题
+3. query 字段是用于知识库检索的关键词，应包含该小节的核心专业术语
+4. 小节之间逻辑连贯，覆盖该章节应有的全部内容
+5. 贴敷式胰岛素泵是III类有源植入医疗器械，需要严格遵循 ISO 13485、ISO 14971、IEC 62304、IEC 62366、GB 9706.1 等标准
+
+【输出格式】严格返回如下JSON，不要包含任何其他文字或markdown标记：
+```json
+[
+  {{
+    "chapter_id": "ch1",
+    "chapter_name": "目的和范围",
+    "sections": [
+      {{"id": "s1.1", "name": "文档目的", "query": "文档目的 编制依据 法规要求"}},
+      {{"id": "s1.2", "name": "适用范围", "query": "适用范围 产品覆盖 贴敷式胰岛素泵"}},
+      {{"id": "s1.3", "name": "术语和定义", "query": "术语定义 专业术语 缩略语"}}
+    ]
+  }}
+]
+```"""
+
+        print(f"\n阶段1: 生成文档结构大纲...")
+        outline_text = self._call_api(outline_prompt, max_tokens=4000)
+
+        # 解析 JSON
+        outline = self._parse_outline_json(outline_text, chapters)
+        total_sections = sum(len(ch.get("sections", [])) for ch in outline)
+        print(f"  大纲生成完成: {len(outline)} 章, {total_sections} 小节")
+
+        return outline
+
+    def _parse_outline_json(self, text: str, fallback_chapters: list) -> list:
+        """解析 LLM 返回的大纲 JSON，失败时回退到无小节模式"""
+        import re
+
+        # 提取 JSON 块
+        json_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
+        if json_match:
+            json_str = json_match.group(1).strip()
+        else:
+            # 尝试直接解析整个文本
+            json_str = text.strip()
+
+        # 移除可能的 BOM 和前后空白
+        json_str = json_str.lstrip('\ufeff').strip()
+
+        try:
+            outline = json.loads(json_str)
+            if not isinstance(outline, list) or len(outline) == 0:
+                raise ValueError("outline 不是有效的列表")
+
+            # 验证结构完整性
+            for ch in outline:
+                if "chapter_name" not in ch or "sections" not in ch:
+                    raise ValueError(f"章节结构不完整: {ch}")
+                for sec in ch.get("sections", []):
+                    if "name" not in sec or "query" not in sec:
+                        raise ValueError(f"小节结构不完整: {sec}")
+
+            return outline
+
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"  [WARNING] 大纲JSON解析失败 ({e})，回退到章节级生成")
+            # 回退：每个章节作为一个整体小节
+            result = []
+            for i, ch in enumerate(fallback_chapters):
+                result.append({
+                    "chapter_id": ch.get("id", f"ch{i+1}"),
+                    "chapter_name": ch["name"],
+                    "sections": [
+                        {"id": f"s{i+1}.1", "name": ch["name"], "query": ch["query"]}
+                    ]
+                })
+            return result
+
     def _generate_by_chapters(
         self,
         doc_type: str,
@@ -1809,10 +2005,11 @@ class MiniMaxService:
         attachment_content: str = ""
     ) -> str:
         """
-        分章节生成文档内容并汇总
+        分小节生成文档内容并汇总（两阶段生成）
 
-        流程：获取章节结构 → [Phase 1a: RAG串行 + Phase 1b: 搜索并行 + Phase 1c: Prompt串行]
-             → Phase 2: 并行调用LLM API → Phase 3: 按原始顺序汇总成完整文档
+        阶段1: 调用LLM生成文档结构大纲（章节 → 小节）
+        阶段2: 逐小节执行 RAG检索 + Web搜索 + Prompt构建 + LLM生成
+        最后: 按章节→小节顺序组装完整文档
         """
         if not self.api_key:
             raise ValueError("MINIMAX_API_KEY 未设置，请联系管理员配置")
@@ -1820,56 +2017,126 @@ class MiniMaxService:
         chapters = DOC_CHAPTERS.get(doc_type, DEFAULT_CHAPTERS)
         doc_name = DOC_TYPE_LABELS.get(doc_type, doc_type)
 
-        print(f"开始分章节生成文档（共 {len(chapters)} 章）...")
+        print(f"开始分小节生成文档（共 {len(chapters)} 章）...")
         self.search_log = []  # 重置搜索日志
+        self.timing_log = {
+            "outline": 0.0,
+            "rag_total": 0.0,
+            "search_total": 0.0,
+            "prompt_total": 0.0,
+            "llm_total": 0.0,
+            "sections": [],   # [{"chapter_idx", "chapter_name", "section_name", "rag_time", "llm_time"}]
+            "chapters": [],   # [{"chapter_idx", "chapter_name", "section_count", "total_time"}]
+            "total": 0.0,
+        }
+        _total_start = time.time()
 
-        # 预计算各章节查询
-        chapter_queries = {}
-        for chapter in chapters:
-            chapter_queries[chapter["name"]] = f"{chapter['query']} {product_name} {product_type}"
+        # 进度回调辅助
+        def _progress(phase, current, total, message):
+            if self.progress_callback:
+                try:
+                    self.progress_callback(phase, current, total, message)
+                except Exception:
+                    pass
 
-        # ========== Phase 1a: 串行 RAG 检索（速度快 ~200ms/章，ChromaDB 读安全） ==========
-        print(f"\nPhase 1a: 串行 RAG 检索（{len(chapters)} 章）...")
-        chapter_rag = {}  # chapter_name -> (chunks, uploads_chunks)
-        for i, chapter in enumerate(chapters, 1):
-            name = chapter["name"]
-            print(f"  RAG [{i}/{len(chapters)}] {name}...")
-            chapter_rag[name] = self._rag_retrieve_for_chapter(chapter_queries[name], doc_type)
+        _progress("outline", 0, 1, "正在生成文档结构大纲...")
 
-        # ========== Phase 1b: 并行 Web 搜索（速度慢，并行化大幅提速） ==========
-        print(f"\nPhase 1b: 并行 Web 搜索（{len(chapters)} 章，最多 {self.max_search_workers} 路并发）...")
-        chapter_search = {}  # chapter_name -> (web_info, downloaded_files, search_method)
+        # ========== 阶段1: 生成文档结构大纲 ==========
+        _outline_start = time.time()
+        outline = self._generate_outline(
+            doc_type, product_name, product_type, product_params, chapters, doc_name
+        )
+        self.timing_log["outline"] = time.time() - _outline_start
+        print(f"  [计时] 大纲生成: {self.timing_log['outline']:.2f}s")
+
+        # 展平小节列表，保留章节信息
+        all_sections = []
+        for ch in outline:
+            ch_idx = outline.index(ch) + 1
+            for sec in ch.get("sections", []):
+                all_sections.append({
+                    "chapter_idx": ch_idx,
+                    "chapter_name": ch["chapter_name"],
+                    "section_id": sec.get("id", f"s{ch_idx}.{len(all_sections)+1}"),
+                    "section_name": sec["name"],
+                    "section_query": sec["query"]
+                })
+
+        total = len(all_sections)
+        print(f"\n阶段2: 逐小节生成内容（共 {total} 小节）...")
+
+        _progress("outline", 1, 1, f"大纲生成完成，共 {len(outline)} 章 {total} 小节，开始生成内容...")
+
+        # 小节计时记录：section_id -> {rag_time, search_time, llm_time}
+        section_timings = {sec['section_id']: {"rag_time": 0.0, "search_time": 0.0, "llm_time": 0.0}
+                           for sec in all_sections}
+
+        # ========== Phase 2a: 串行 RAG 检索（每个小节独立检索） ==========
+        print(f"\nPhase 2a: 串行 RAG 检索（{total} 小节）...")
+        _rag_phase_start = time.time()
+        section_rag = {}  # section_id -> (chunks, uploads_chunks)
+        for i, sec in enumerate(all_sections, 1):
+            query_str = f"{sec['section_query']} {product_name} {product_type}"
+            print(f"  RAG [{i}/{total}] {sec['chapter_name']} - {sec['section_name']}...")
+            _t = time.time()
+            section_rag[sec['section_id']] = self._rag_retrieve_for_chapter(query_str, doc_type)
+            section_timings[sec['section_id']]["rag_time"] = time.time() - _t
+            _progress("rag", i, total, f"RAG检索 [{i}/{total}] {sec['chapter_name']} - {sec['section_name']}")
+        self.timing_log["rag_total"] = time.time() - _rag_phase_start
+        print(f"  [计时] RAG 检索阶段总耗时: {self.timing_log['rag_total']:.2f}s")
+
+        # ========== Phase 2b: 并行 Web 搜索（每个小节独立搜索） ==========
+        print(f"\nPhase 2b: 并行 Web 搜索（{total} 小节，最多 {self.max_search_workers} 路并发）...")
+        _search_phase_start = time.time()
+        section_search = {}  # section_id -> (web_info, downloaded_files, search_method)
+        _search_start_per_id = {}
+
+        def _timed_search(sec_id, ch_name, sec_name):
+            _start = time.time()
+            try:
+                result = self._search_for_chapter(
+                    f"{ch_name}-{sec_name}",
+                    product_type, product_params, doc_type
+                )
+                return result, time.time() - _start
+            except Exception as e:
+                return ("", [], f"error: {e}"), time.time() - _start
 
         with ThreadPoolExecutor(max_workers=self.max_search_workers) as executor:
-            future_to_name = {}
-            for chapter in chapters:
+            future_to_id = {}
+            for sec in all_sections:
                 future = executor.submit(
-                    self._search_for_chapter,
-                    chapter["name"], product_type, product_params, doc_type
+                    _timed_search, sec['section_id'], sec['chapter_name'], sec['section_name']
                 )
-                future_to_name[future] = chapter["name"]
+                future_to_id[future] = sec['section_id']
 
-            for future in as_completed(future_to_name):
-                name = future_to_name[future]
+            for future in as_completed(future_to_id):
+                sec_id = future_to_id[future]
                 try:
-                    chapter_search[name] = future.result()
+                    result, elapsed = future.result()
+                    section_search[sec_id] = result
+                    section_timings[sec_id]["search_time"] = elapsed
                 except Exception as e:
-                    print(f"    [WARNING] 搜索线程异常 [{name}]: {e}")
-                    chapter_search[name] = ("", [], "error")
+                    print(f"    [WARNING] 搜索线程异常 [{sec_id}]: {e}")
+                    section_search[sec_id] = ("", [], "error")
+        self.timing_log["search_total"] = time.time() - _search_phase_start
+        print(f"  [计时] Web 搜索阶段总耗时（并行墙钟）: {self.timing_log['search_total']:.2f}s")
 
-        # ========== Phase 1c: 串行构建 Prompt（速度快） ==========
-        print(f"\nPhase 1c: 构建 Prompt（{len(chapters)} 章）...")
-        chapter_inputs = []
+        # ========== Phase 2c: 串行构建 Prompt（每个小节） ==========
+        print(f"\nPhase 2c: 构建 Prompt（{total} 小节）...")
+        _prompt_phase_start = time.time()
+        section_inputs = []
 
-        for i, chapter in enumerate(chapters, 1):
-            name = chapter["name"]
-            chunks, uploads_chunks = chapter_rag[name]
-            web_info, _, _ = chapter_search[name]
+        for i, sec in enumerate(all_sections, 1):
+            sec_id = sec['section_id']
+            chunks, uploads_chunks = section_rag[sec_id]
+            web_info, _, _ = section_search[sec_id]
 
-            enhanced_prompt = self._build_chapter_prompt(
+            enhanced_prompt = self._build_section_prompt(
                 index=i,
-                chapter_name=name,
-                chapter_query=chapter_queries[name],
+                chapter_name=sec['chapter_name'],
+                section_name=sec['section_name'],
+                section_query=sec['section_query'],
                 chunks=chunks,
                 uploads_chunks=uploads_chunks,
                 web_info=web_info,
@@ -1877,33 +2144,59 @@ class MiniMaxService:
                 product_name=product_name,
                 product_type=product_type,
                 product_params=product_params,
-                attachment_content=attachment_content
+                attachment_content=attachment_content,
+                total_sections=total
             )
 
-            chapter_inputs.append((i, name, enhanced_prompt))
-            print(f"  [{i}/{len(chapters)}] {name} Prompt 构建完成 ({len(enhanced_prompt)} 字符)")
+            section_inputs.append((i, sec, enhanced_prompt))
+            print(f"  [{i}/{total}] {sec['chapter_name']} - {sec['section_name']} Prompt 构建完成 ({len(enhanced_prompt)} 字符)")
+        self.timing_log["prompt_total"] = time.time() - _prompt_phase_start
+        print(f"  [计时] Prompt 构建阶段总耗时: {self.timing_log['prompt_total']:.2f}s")
 
-        # ========== Phase 2: 并行调用 LLM API ==========
-        print(f"\nPhase 2: 并行调用LLM API（{len(chapter_inputs)} 章，最多 {self.max_concurrent} 路并发）...")
+        # ========== Phase 2d: 并行调用 LLM API（逐小节） ==========
+        print(f"\nPhase 2d: 并行调用LLM API（{total} 小节，最多 {self.max_concurrent} 路并发）...")
+        _llm_phase_start = time.time()
 
         results = {}  # index -> (content, error)
+        completed_count = 0
+        _progress_lock = threading.Lock()
+
+        def _timed_call_api(prompt):
+            _start = time.time()
+            try:
+                content = self._call_api(prompt)
+                return content, time.time() - _start, None
+            except Exception as e:
+                return "", time.time() - _start, e
 
         with ThreadPoolExecutor(max_workers=self.max_concurrent) as executor:
             future_to_idx = {
-                executor.submit(self._call_api, prompt): (idx, name)
-                for idx, name, prompt in chapter_inputs
+                executor.submit(_timed_call_api, prompt): (idx, sec)
+                for idx, sec, prompt in section_inputs
             }
             for future in as_completed(future_to_idx):
-                idx, name = future_to_idx[future]
+                idx, sec = future_to_idx[future]
                 try:
-                    content = future.result()
-                    results[idx] = (content, None)
-                    print(f"  [{idx}/{len(chapters)}] {name} 完成 ({len(content)} 字符)")
+                    content, elapsed, err = future.result()
+                    section_timings[sec['section_id']]["llm_time"] = elapsed
+                    if err is not None:
+                        results[idx] = ("", str(err))
+                        print(f"  [{idx}/{total}] {sec['chapter_name']} - {sec['section_name']} 失败 ({elapsed:.2f}s): {err}")
+                    else:
+                        results[idx] = (content, None)
+                        print(f"  [{idx}/{total}] {sec['chapter_name']} - {sec['section_name']} 完成 ({len(content)} 字符, {elapsed:.2f}s)")
                 except Exception as e:
                     results[idx] = ("", str(e))
-                    print(f"  [{idx}/{len(chapters)}] {name} 失败: {e}")
+                    print(f"  [{idx}/{total}] {sec['chapter_name']} - {sec['section_name']} 异常: {e}")
+                finally:
+                    with _progress_lock:
+                        completed_count += 1
+                        _progress("generate", completed_count, total,
+                                  f"内容生成 [{completed_count}/{total}] {sec['chapter_name']} - {sec['section_name']}")
+        self.timing_log["llm_total"] = time.time() - _llm_phase_start
+        print(f"  [计时] LLM 调用阶段总耗时（并行墙钟）: {self.timing_log['llm_total']:.2f}s")
 
-        # ========== Phase 3: 按原始顺序组装文档 ==========
+        # ========== Phase 2e: 按章节→小节顺序组装文档 ==========
         full_document = []
         full_document.append(f"# {product_name} - {doc_name}\n\n")
         full_document.append(f"**产品信息：**\n")
@@ -1914,22 +2207,110 @@ class MiniMaxService:
             full_document.append(f"\n**附件材料：** 已提供产品相关参考文档\n")
         full_document.append("---\n\n")
 
-        for idx, chapter_name, prompt in chapter_inputs:
+        # 按章节分组
+        current_chapter_idx = None
+        for idx, sec, prompt in section_inputs:
+            ch_idx = sec['chapter_idx']
+            ch_name = sec['chapter_name']
+            sec_name = sec['section_name']
+
+            # 新章节开始
+            if ch_idx != current_chapter_idx:
+                current_chapter_idx = ch_idx
+                full_document.append(f"## 第{ch_idx}章 {ch_name}\n\n")
+
+            # 小节标题
+            full_document.append(f"### {sec_name}\n\n")
             content, error = results.get(idx, ("", "未知错误"))
-            full_document.append(f"## 第{idx}章 {chapter_name}\n\n")
             if error:
                 full_document.append(f"（内容生成失败: {error}）\n\n")
             else:
                 full_document.append(content)
                 full_document.append("\n\n")
 
-        print(f"文档生成完成！总计 {len(''.join(full_document))} 字符")
+        # ========== 计时汇总 ==========
+        # 记录每个小节的耗时
+        for sec in all_sections:
+            t = section_timings[sec['section_id']]
+            self.timing_log["sections"].append({
+                "chapter_idx": sec['chapter_idx'],
+                "chapter_name": sec['chapter_name'],
+                "section_name": sec['section_name'],
+                "rag_time": round(t["rag_time"], 2),
+                "search_time": round(t["search_time"], 2),
+                "llm_time": round(t["llm_time"], 2),
+                "section_total": round(t["rag_time"] + t["search_time"] + t["llm_time"], 2),
+            })
+
+        # 按章节聚合：每章节耗时 = 该章节所有小节的 (rag + search + llm) 之和
+        chapter_agg = {}  # ch_idx -> {chapter_name, section_count, rag, search, llm, total}
+        for sec in all_sections:
+            ch_idx = sec['chapter_idx']
+            t = section_timings[sec['section_id']]
+            if ch_idx not in chapter_agg:
+                chapter_agg[ch_idx] = {
+                    "chapter_idx": ch_idx,
+                    "chapter_name": sec['chapter_name'],
+                    "section_count": 0,
+                    "rag_time": 0.0,
+                    "search_time": 0.0,
+                    "llm_time": 0.0,
+                    "total_time": 0.0,
+                }
+            agg = chapter_agg[ch_idx]
+            agg["section_count"] += 1
+            agg["rag_time"] += t["rag_time"]
+            agg["search_time"] += t["search_time"]
+            agg["llm_time"] += t["llm_time"]
+            agg["total_time"] += t["rag_time"] + t["search_time"] + t["llm_time"]
+
+        for ch_idx in sorted(chapter_agg.keys()):
+            agg = chapter_agg[ch_idx]
+            self.timing_log["chapters"].append({
+                "chapter_idx": agg["chapter_idx"],
+                "chapter_name": agg["chapter_name"],
+                "section_count": agg["section_count"],
+                "rag_time": round(agg["rag_time"], 2),
+                "search_time": round(agg["search_time"], 2),
+                "llm_time": round(agg["llm_time"], 2),
+                "total_time": round(agg["total_time"], 2),
+            })
+
+        self.timing_log["total"] = round(time.time() - _total_start, 2)
+        self.timing_log["outline"] = round(self.timing_log["outline"], 2)
+        self.timing_log["rag_total"] = round(self.timing_log["rag_total"], 2)
+        self.timing_log["search_total"] = round(self.timing_log["search_total"], 2)
+        self.timing_log["prompt_total"] = round(self.timing_log["prompt_total"], 2)
+        self.timing_log["llm_total"] = round(self.timing_log["llm_total"], 2)
+
+        # 打印汇总表
+        print("\n" + "=" * 80)
+        print("文档生成计时汇总")
+        print("=" * 80)
+        print(f"  大纲生成:       {self.timing_log['outline']:>8.2f}s")
+        print(f"  RAG 检索阶段:   {self.timing_log['rag_total']:>8.2f}s")
+        print(f"  Web 搜索阶段:   {self.timing_log['search_total']:>8.2f}s (并行墙钟)")
+        print(f"  Prompt 构建:    {self.timing_log['prompt_total']:>8.2f}s")
+        print(f"  LLM 调用阶段:   {self.timing_log['llm_total']:>8.2f}s (并行墙钟)")
+        print("-" * 80)
+        print(f"  {'章节':<40} {'小节数':>6} {'章节总耗时':>12}")
+        print("-" * 80)
+        for ch in self.timing_log["chapters"]:
+            name = f"第{ch['chapter_idx']}章 {ch['chapter_name']}"
+            if len(name) > 38:
+                name = name[:37] + "…"
+            print(f"  {name:<40} {ch['section_count']:>6} {ch['total_time']:>10.2f}s")
+        print("-" * 80)
+        print(f"  整篇文档总耗时: {self.timing_log['total']:>8.2f}s")
+        print("=" * 80)
+
+        print(f"\n文档生成完成！总计 {len(''.join(full_document))} 字符")
         return "".join(full_document)
 
     # 保留旧方法名作为别名，兼容现有调用
     generate_content_with_rag = _generate_by_chapters
 
-    def _call_api(self, prompt: str, max_tokens: int = 12000) -> str:
+    def _call_api(self, prompt: str, max_tokens: int = 6000) -> str:
         """内部方法：调用 MiniMax API（带重试机制）"""
         headers = {
             "Authorization": f"Bearer {self.api_key}",

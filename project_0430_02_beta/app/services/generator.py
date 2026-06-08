@@ -13,8 +13,9 @@ from typing import Optional, List
 class DocumentGenerator:
     """文档生成器 - 协调整个生成流程"""
 
-    def __init__(self):
+    def __init__(self, progress_callback=None):
         self.minimax_service = MiniMaxService()
+        self.minimax_service.progress_callback = progress_callback  # 传递进度回调
         self.template_service = TemplateService()
         self.last_generated_content = ""  # 最近一次生成的 Markdown 内容
         self.last_diff_data = None  # 最近一次修订的差异数据
@@ -107,6 +108,11 @@ class DocumentGenerator:
     def search_log(self) -> list:
         """返回最近一次生成的搜索方式日志"""
         return getattr(self.minimax_service, "search_log", [])
+
+    @property
+    def timing_log(self) -> dict:
+        """返回最近一次生成的计时日志（章节级 + 总耗时）"""
+        return getattr(self.minimax_service, "timing_log", {})
 
     async def revise(
         self,

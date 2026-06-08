@@ -135,3 +135,26 @@
 
 ### 架构说明
 查询流程: VectorStore.retrieve() → 遍历主DB (chroma_db) 的 QUERY_COLLECTIONS + 额外DB (chroma_db_insulin_pump) 的 EXTRA_DB_CONFIG → 合并结果按相似度排序
+
+## 2026-06-06 - 文档生成提速优化（步骤1：参数调整）
+- Working Dir: `E:\nrf_sample_codes\working_team_work\public\project\project_0430_02_beta`
+- Purpose: 通过调整两个核心参数显著降低文档生成总耗时
+- 预期提速: 30-40%
+
+### File Edited
+- File: `app/services/minimax.py`
+- Change 1 (line 1234): `self.max_concurrent = 6` → `self.max_concurrent = 12`
+  - 理由: 小节LLM调用最大并发数翻倍。文档通常 20-40 小节，6 路并发需排 4-7 轮，12 路并发只需 2-4 轮，LLM 阶段墙钟时间近乎减半。火山方舟单 key 默认 RPM 300+，可支撑 12 并发。
+- Change 2 (line 2313): `_call_api(..., max_tokens: int = 12000)` → `max_tokens: int = 6000`
+  - 理由: 单小节实际内容很少超 6000 token。LLM 出 token 是线性时间消耗，上限砍半直接降低生成时长。不影响实际内容质量。
+- Result: Success
+- 验证方式: 重启服务后生成一份文档，对比 `timing_log` 中 `llm_total` 和 `total` 字段
+
+## 2026-06-06 - 文档生成提速优化（Web搜索并发提升）
+- Working Dir: `E:\nrf_sample_codes\working_team_work\public\project\project_0430_02_beta`
+- File: `app/services/minimax.py`
+- Change (line 1235): `self.max_search_workers = 6` → `self.max_search_workers = 12`
+- 理由: Web 搜索阶段（Phase 2b）当前是仅次于 LLM 的耗时大户。Agent SDK 搜索本质是 Claude API 调用，资源占用很轻，可支撑较高并发。Playwright 回退路径开销较大，但有 Agent SDK 优先策略兜底。30 小节文档原需 5 轮搜索（6 并发），现只需 3 轮（12 并发）。
+- 预期提速: Web 搜索阶段墙钟时间下降约 40%
+- Result: Success
+
